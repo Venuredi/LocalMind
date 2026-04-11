@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Intelligence System</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/dist/vis-network.min.css" rel="stylesheet">
+    <style>
+        .wizard-progress {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .wizard-step {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            color: #777;
+            font-weight: bold;
+        }
+        .wizard-step.active {
+            color: #4CAF50;
+            border-bottom: 3px solid #4CAF50;
+            margin-bottom: -12px;
+        }
+        .context-layer {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 5px;
+            border-left: 4px solid #4CAF50;
+        }
+        .context-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        .context-item input {
+            margin-top: 4px;
+            margin-right: 10px;
+        }
+        .wizard-content {
+            display: none;
+        }
+        .wizard-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-container">
+                <div class="logo-icon">
+                    <img src="/static/localMind.png" alt="LocalMind Logo" width="40" height="40">
+                </div>
+                <div class="logo-text">
+                    <h1><span>Local</span>Mind</h1>
+                    <p>Your local code intelligence</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav-tabs">
+            <button class="tab-btn active" data-tab="connect">🔗 Connect Repository</button>
+            <button class="tab-btn" data-tab="ontology">📊 Code Ontology</button>
+            <button class="tab-btn" data-tab="requirements">🛠 Prompt Builder</button>
+            <button class="tab-btn" data-tab="stats">📈 Statistics</button>
+        </nav>
+
+        <!-- Tab: Connect Repository -->
+        <div id="connect" class="tab-content active">
+            <div class="card">
+                <h2>Connect to Repository</h2>
+                <p>Index your multi-stack repository to build the code intelligence database.</p>
+
+                <div class="form-group">
+                    <label for="repoPath">Repository Path</label>
+                    <input
+                        type="text"
+                        id="repoPath"
+                        placeholder="/path/to/your/repository or ./demo-repo"
+                        value="./demo-repo"
+                    >
+                    <small>Enter the absolute or relative path to your repository</small>
+                </div>
+
+                <button onclick="indexRepository()" class="btn btn-primary">
+                    <span id="indexBtnText">🔍 Index Repository</span>
+                    <span id="indexSpinner" class="spinner" style="display: none;"></span>
+                </button>
+
+                <div id="indexStatus" class="status-box" style="display: none;">
+                    <div id="indexProgress"></div>
+                </div>
+
+                <div id="indexResult" class="result-box" style="display: none;"></div>
+            </div>
+
+            <!-- System Status -->
+            <div class="card" id="systemStatus" style="display: none;">
+                <h3>📊 System Status</h3>
+                <div id="statusContent"></div>
+            </div>
+        </div>
+
+        <!-- Tab: Code Ontology -->
+        <div id="ontology" class="tab-content">
+            <div class="card">
+                <h2>📊 Code Ontology Visualization</h2>
+                <p>Interactive visualization of your codebase structure and dependencies.</p>
+
+                <div class="toolbar">
+                    <button onclick="loadGraph()" class="btn btn-secondary">🔄 Refresh Graph</button>
+                    <button onclick="exportGraph()" class="btn btn-secondary">💾 Export</button>
+                    <button onclick="zoomIn()" class="btn btn-secondary">➕ Zoom In</button>
+                    <button onclick="zoomOut()" class="btn btn-secondary">➖ Zoom Out</button>
+                    <button onclick="toggleFullscreen()" class="btn btn-secondary">🔲 Fullscreen</button>
+
+                    <div class="filter-group">
+                        <label>Filter by Layer:</label>
+                        <select id="layerFilter" onchange="filterGraph()">
+                            <option value="">All Layers</option>
+                            <option value="frontend-mobile">Mobile</option>
+                            <option value="frontend-web">Web</option>
+                            <option value="backend">Backend</option>
+                            <option value="data">Data</option>
+                            <option value="infrastructure">Infrastructure</option>
+                        </select>
+                    </div>
+
+                    <div class="search-group" style="display: flex; align-items: center; gap: 8px; margin-left: 15px;">
+                        <input type="text" id="graphSearchInput" list="graphNodeList" placeholder="Search node..." onkeypress="if(event.key==='Enter') searchGraphNode()" style="padding: 8px 12px; border: 2px solid #e9ecef; border-radius: 6px; font-size: 14px; width: 250px;">
+                        <datalist id="graphNodeList"></datalist>
+                        <button onclick="searchGraphNode()" class="btn btn-secondary">🔍 Find</button>
+                    </div>
+                </div>
+
+                <div id="graphContainer" style="height: 600px; border: 1px solid #ddd;"></div>
+
+                <div id="nodeDetails" class="detail-panel" style="display: none;">
+                    <h3>Component Details</h3>
+                    <div id="nodeDetailsContent"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Prompt Builder -->
+        <div id="requirements" class="tab-content">
+            <div class="card">
+                <h2>🛠 Prompt Builder</h2>
+                <p>Describe what you want to build, fix, or modify. Get an optimized AI-ready prompt for Cursor or similar tools.</p>
+
+                <div class="wizard-progress">
+                    <div class="wizard-step active" id="step1-indicator">1. Details</div>
+                    <div class="wizard-step" id="step2-indicator">2. Context Details</div>
+                    <div class="wizard-step" id="step3-indicator">3. Final Prompt</div>
+                </div>
+
+                <!-- Step 1: Details -->
+                <div id="prompt-step-1" class="wizard-content active">
+                    <div class="form-group">
+                        <label for="requirementType">Type</label>
+                        <select id="requirementType">
+                            <option value="feature">🆕 New Feature</option>
+                            <option value="extension">📈 Feature Extension</option>
+                            <option value="enhance">⚡ Enhancement</option>
+                            <option value="bugfix">🐛 Bug Fix</option>
+                            <option value="refactor">♻️ Refactoring</option>
+                            <option value="analyse">🔍 Analysis</option>
+                        </select>
+                        <small id="intentInferredNote" style="display:none; color:#2196F3;">
+                            🤖 Intent auto-detected from your description
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="requirementTitle">Title</label>
+                        <input
+                            type="text"
+                            id="requirementTitle"
+                            placeholder="e.g., Add password reset functionality"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="requirementDescription">Description</label>
+                        <textarea
+                            id="requirementDescription"
+                            rows="6"
+                            placeholder="Describe in detail what you want to accomplish...
+
+Examples:
+- Add a password reset feature that sends email with reset link
+- Fix login timeout issue on mobile app
+- Refactor AuthService to improve performance"
+                        ></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="affectedComponents">Affected Components (Optional)</label>
+                        <input
+                            type="text"
+                            id="affectedComponents"
+                            placeholder="e.g., AuthController, LoginScreen"
+                        >
+                        <small>Comma-separated list of components</small>
+                    </div>
+
+                    <button onclick="analyzeContext()" class="btn btn-primary">
+                        <span id="analyzeBtnText">🔍 Analyze Context & Dependencies</span>
+                        <span id="analyzeSpinner" class="spinner" style="display: none;"></span>
+                    </button>
+                </div>
+
+                <!-- Step 2: Context & Dependencies -->
+                <div id="prompt-step-2" class="wizard-content">
+                    <h3>Review Affected Components</h3>
+                    <p>Select which components and dependencies should be included in the context for AI.</p>
+                    
+                    <div id="contextSelectionArea" style="margin-bottom: 20px;">
+                        <!-- Populated dynamically -->
+                    </div>
+
+                    <div class="action-buttons">
+                        <button onclick="goToPromptStep(1)" class="btn btn-secondary">⬅️ Back</button>
+                        <button onclick="generatePrompt()" class="btn btn-primary">🤖 Generate Final Prompt</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Result -->
+                <div id="prompt-step-3" class="wizard-content">
+                    <div class="action-buttons" style="margin-bottom: 20px;">
+                        <button onclick="goToPromptStep(2)" class="btn btn-secondary">⬅️ Back to Context</button>
+                        <button onclick="startNewPrompt()" class="btn btn-secondary">🔄 Start New task</button>
+                    </div>
+
+                    <div id="promptResult" class="result-box">
+                        <h3>Generated Prompt for AI Tools</h3>
+                        <div id="promptContent" class="code-block"></div>
+
+                        <div class="action-buttons">
+                            <button onclick="copyPrompt()" class="btn btn-secondary">📋 Copy to Clipboard</button>
+                            <button onclick="downloadPrompt()" class="btn btn-secondary">💾 Download</button>
+                        </div>
+
+                        <div id="impactAnalysis" class="impact-box"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Examples -->
+            <div class="card examples-card">
+                <h3>💡 Examples</h3>
+                <div class="examples-grid">
+                    <div class="example" onclick="loadExample('password-reset')">
+                        <strong>Password Reset</strong>
+                        <p>Add email-based password reset functionality</p>
+                    </div>
+                    <div class="example" onclick="loadExample('2fa')">
+                        <strong>Two-Factor Auth</strong>
+                        <p>Implement 2FA with SMS verification</p>
+                    </div>
+                    <div class="example" onclick="loadExample('login-bug')">
+                        <strong>Login Timeout</strong>
+                        <p>Fix session timeout issue on mobile</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Search (Removed) -->
+
+        <!-- Tab: Statistics -->
+        <div id="stats" class="tab-content">
+            <div class="card">
+                <h2>📈 Repository Statistics</h2>
+                <div id="statsContent">
+                    <p class="loading">Load repository data first...</p>
+                </div>
+            </div>
+
+            <div class="stats-grid" id="statsGrid"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="/static/app.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+# Core parsing and AST
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
+libcst==1.1.0
+esprima==4.0.1
+pyyaml==6.0.1
+python-hcl2==4.3.2
+
+# Graph and network analysis
+networkx==3.2.1
+matplotlib>=3.7.0
+
+# Vector search and embeddings
+chromadb==0.4.22
+sentence-transformers==2.3.1
+faiss-cpu>=1.8.0
+openai==1.10.0
+
+# Web framework for API
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic>=2.7.4
+
+# Data processing
+pandas==2.2.0
+numpy==1.26.3
+
+# Code analysis
+radon==6.0.1
+lizard==1.17.10
+
+# Utilities
+python-dotenv==1.0.0
+rich==13.7.0
+click==8.1.7
+loguru==0.7.2
+aiofiles==23.2.1
+
+# Development
+pytest>=8.0.0
+pytest-asyncio==0.23.3
+black==24.1.1
+ruff==0.1.14
+mypy==1.8.0
