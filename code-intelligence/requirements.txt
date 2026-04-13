@@ -1,0 +1,31 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+
+# LLM Integration
+ollama==0.1.6
+
+# Vector Database & Embeddings
+chromadb==0.4.22
+
+# Graph & Visualization
+networkx==3.2.1
+matplotlib==3.8.2
+
+# Code Parsing
+tree-sitter==0.21.0
+tree-sitter-languages==1.10.2
+hcl2==4.3.2
+
+# Data Processing
+pyyaml==6.0.1
+
+# Development & Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+
+# Utilities (most are built-in, but adding extras)
+python-multipart==0.0.6
+aiofiles==23.2.1
+requests==2.31.0

@@ -55,6 +55,7 @@ async function checkSystemStatus() {
 
 // Index Repository with Real-Time Progress
 let indexEventSource = null;
+let stepsCompleted = 0;
 
 async function indexRepository() {
     const repoPath = document.getElementById('repoPath').value.trim();
@@ -64,35 +65,12 @@ async function indexRepository() {
         return;
     }
 
-    // Show loading
+    // Show loading on button
     document.getElementById('indexBtnText').style.display = 'none';
     document.getElementById('indexSpinner').style.display = 'inline-block';
-    document.getElementById('indexStatus').style.display = 'block';
-    document.getElementById('indexProgress').innerHTML = `
-        <div class="progress-info">
-            <div class="step-title" id="stepTitle">Initializing...</div>
-            <div class="progress-bar-wrapper">
-                <div class="progress-label">
-                    <span>Overall Progress</span>
-                    <span id="overallPercent">0%</span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="overallProgress" style="width: 0%"></div>
-                </div>
-            </div>
-            <div class="progress-bar-wrapper">
-                <div class="progress-label">
-                    <span>Files</span>
-                    <span id="fileCount">0 / 0</span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="fileProgress" style="width: 0%"></div>
-                </div>
-            </div>
-            <div id="currentFile" class="current-file"></div>
-            <div id="statusLog" class="status-log"></div>
-        </div>
-    `;
+
+    // Show progress modal
+    showProgressModal();
 
     try {
         // Start indexing
@@ -210,6 +188,53 @@ function updateIndexProgress(data) {
         statusLog.scrollTop = statusLog.scrollHeight;
     }
 
+    // ========== MODAL UPDATES ==========
+    // Update modal step title
+    const modalStepTitle = document.getElementById('modalStepTitle');
+    if (modalStepTitle) {
+        modalStepTitle.textContent = `Step ${data.step}/${data.total_steps}: ${data.step_name}`;
+    }
+
+    // Update modal overall progress
+    const modalOverallPercent = document.getElementById('modalOverallPercent');
+    const modalOverallProgress = document.getElementById('modalOverallProgress');
+    if (modalOverallPercent) modalOverallPercent.textContent = overallPercent + '%';
+    if (modalOverallProgress) modalOverallProgress.style.width = overallPercent + '%';
+
+    // Update modal current activity
+    if (data.current_file) {
+        const fileName = data.current_file.split('/').pop();
+        const modalCurrentActivity = document.getElementById('modalCurrentActivity');
+        if (modalCurrentActivity) {
+            modalCurrentActivity.textContent = `Processing: ${fileName}`;
+        }
+    } else if (data.step_name) {
+        const modalCurrentActivity = document.getElementById('modalCurrentActivity');
+        if (modalCurrentActivity) {
+            modalCurrentActivity.textContent = data.step_name;
+        }
+    }
+
+    // Display status messages in modal (backend uses rolling buffer of last 100)
+    if (data.status_messages && data.status_messages.length > 0) {
+        const lastMessage = data.status_messages[data.status_messages.length - 1];
+        const stepsLog = document.getElementById('modalStepsLog');
+        const currentLogText = stepsLog ? stepsLog.textContent : '';
+
+        // Only add if this message isn't already in the log
+        if (!currentLogText.includes(lastMessage)) {
+            let type = 'info';
+            if (lastMessage.includes('✅') || lastMessage.includes('complete') || lastMessage.includes('Successfully')) {
+                type = 'success';
+            } else if (lastMessage.includes('❌') || lastMessage.includes('Error') || lastMessage.includes('Failed')) {
+                type = 'error';
+            } else if (lastMessage.includes('⚠️') || lastMessage.includes('Warning')) {
+                type = 'warning';
+            }
+            addStepToLog(lastMessage, type);
+        }
+    }
+
     // Check if complete
     if (data.is_complete) {
         // Cleanup
@@ -233,6 +258,41 @@ function updateIndexProgress(data) {
             `;
             showToast('Repository indexed successfully!', 'success');
             checkSystemStatus();
+
+            // Update modal with completion
+            addStepToLog('✅ Repository indexed successfully!', 'success');
+
+            // Update current activity to show completion
+            const modalCurrentActivity = document.getElementById('modalCurrentActivity');
+            if (modalCurrentActivity) {
+                modalCurrentActivity.textContent = '✅ Indexing complete! Successfully indexed repository.';
+            }
+
+            const modalStats = document.getElementById('modalStats');
+            if (modalStats) {
+                modalStats.style.display = 'block';
+                modalStats.innerHTML = `
+                    <h4>📊 Indexing Complete</h4>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-value">${data.stats.components || 0}</span>
+                            <span class="stat-label">Components</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.stats.relationships || 0}</span>
+                            <span class="stat-label">Relationships</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.stats.apis || 0}</span>
+                            <span class="stat-label">API Endpoints</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.stats.elapsed_seconds?.toFixed(1) || 0}s</span>
+                            <span class="stat-label">Time</span>
+                        </div>
+                    </div>
+                `;
+            }
         } else {
             document.getElementById('indexResult').style.display = 'block';
             document.getElementById('indexResult').innerHTML = `
@@ -240,7 +300,18 @@ function updateIndexProgress(data) {
                 <p>Check the status log above for details.</p>
             `;
             showToast('Indexing failed', 'error');
+            addStepToLog('❌ Indexing failed', 'error');
+
+            // Update current activity to show failure
+            const modalCurrentActivity = document.getElementById('modalCurrentActivity');
+            if (modalCurrentActivity) {
+                modalCurrentActivity.textContent = '❌ Indexing failed. Check the log for details.';
+            }
         }
+
+        // Enable "Close" button at bottom
+        const modalActionBtn = document.getElementById('modalActionBtn');
+        if (modalActionBtn) modalActionBtn.style.display = 'inline-block';
 
         if (indexEventSource) {
             indexEventSource.close();
@@ -364,7 +435,8 @@ function getNodeShape(type) {
 // Show node details
 async function showNodeDetails(nodeId) {
     try {
-        const response = await axios.get(`${API_BASE}/api/components/${nodeId}`);
+        // URL encode the nodeId to handle special characters like :: in component IDs
+        const response = await axios.get(`${API_BASE}/api/components/${encodeURIComponent(nodeId)}`);
         const component = response.data.component;
 
         document.getElementById('nodeDetails').style.display = 'block';
@@ -676,6 +748,8 @@ async function analyzeContext() {
             max_components: targetFiles.length > 0 ? 5 : 20,
             target_files: targetFiles.length > 0 ? targetFiles : null,
             intent: resolvedIntent,
+        }, {
+            timeout: 60000  // 60 seconds timeout
         });
 
         currentContextData = response.data;
@@ -724,7 +798,7 @@ function populateContextSelection(data) {
                 itemDiv.className = 'context-item';
 
                 itemDiv.innerHTML = `
-                    <input type="checkbox" id="ctx_${comp.name}" data-layer="${layer}" data-name="${comp.name}" checked>
+                    <input type="checkbox" id="ctx_${comp.name}" data-layer="${layer}" data-id="${comp.id || comp.name}" checked>
                     <div>
                         <strong>${comp.name}</strong> <span style="color:#666; font-size:12px;">(${comp.type})</span>
                         <div style="font-size:12px; color:#888;">${comp.file_path}</div>
@@ -749,14 +823,17 @@ async function generatePrompt() {
     }
 
     try {
-        // Get selected component names from checkboxes
+        // Get selected component IDs from checkboxes
         const checkboxes = document.querySelectorAll('#contextSelectionArea input[type="checkbox"]');
-        const selectedNames = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.getAttribute('data-name'));
+        const selectedNames = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.getAttribute('data-id'));
 
         if (selectedNames.length === 0) {
             showToast('Please select at least one component', 'error');
             return;
         }
+
+        // Get selected generation method
+        const generationMethod = document.querySelector('input[name="generationMethod"]:checked')?.value || 'llm';
 
         // Map old intent types to new prompt types
         const intentToPromptTypeMap = {
@@ -770,43 +847,92 @@ async function generatePrompt() {
 
         const promptType = intentToPromptTypeMap[currentContextData.resolvedIntent] || 'enhancement';
 
-        // Show loading state
-        document.getElementById('promptContent').textContent = 'Generating prompt...';
+        // Show loading state and go to step 3
         goToPromptStep(3);
+        const promptContentEl = document.getElementById('promptContent');
+        promptContentEl.innerHTML = '<div style="color: #666; font-style: italic;">🔄 Initializing...</div>';
 
-        // Call backend API to generate prompt
-        const response = await axios.post(`${API_BASE}/api/prompt/generate`, {
-            type: promptType,
-            title: currentContextData.title,
-            description: currentContextData.description,
-            components: selectedNames
+        // Use streaming endpoint for real-time feedback
+        const response = await fetch(`${API_BASE}/api/prompt/generate/stream`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                type: promptType,
+                title: currentContextData.title,
+                description: currentContextData.description,
+                components: selectedNames,
+                generation_method: generationMethod
+            })
         });
 
-        const { prompt, metadata } = response.data;
-
-        // Display the generated prompt
-        document.getElementById('promptContent').textContent = prompt;
-
-        // Show metadata if available
-        if (metadata) {
-            const metadataHtml = `
-                <div style="background: #f0f8ff; padding: 15px; border-radius: 5px; margin-top: 15px;">
-                    <h4 style="margin-top: 0;">📊 Prompt Metadata</h4>
-                    <p><strong>Components Analyzed:</strong> ${metadata.component_count || selectedNames.length}</p>
-                    <p><strong>Dependencies Found:</strong> ${metadata.dependencies_count || 0}</p>
-                    <p><strong>Prompt Type:</strong> ${promptType}</p>
-                </div>
-            `;
-            document.getElementById('promptContent').innerHTML = `<pre style="white-space: pre-wrap;">${prompt}</pre>${metadataHtml}`;
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        showToast('Prompt generated successfully!', 'success');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedPrompt = '';
+        let buffer = '';
+
+        while (true) {
+            const {done, value} = await reader.read();
+
+            if (done) break;
+
+            // Decode chunk
+            buffer += decoder.decode(value, {stream: true});
+
+            // Process complete SSE messages
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.substring(6));
+
+                        if (data.type === 'status') {
+                            // Show status message
+                            promptContentEl.innerHTML = `<div style="color: #2196F3; font-style: italic;">⏳ ${data.message}</div>`;
+                        } else if (data.type === 'chunk') {
+                            // Append chunk to accumulated prompt
+                            accumulatedPrompt += data.content;
+                            promptContentEl.innerHTML = `<pre style="white-space: pre-wrap; margin: 0;">${accumulatedPrompt}<span style="animation: blink 1s infinite;">▊</span></pre>`;
+                        } else if (data.type === 'complete') {
+                            // Final prompt received
+                            const finalPrompt = data.full_prompt || accumulatedPrompt;
+                            promptContentEl.innerHTML = `<pre style="white-space: pre-wrap; margin: 0;">${finalPrompt}</pre>`;
+
+                            const methodBadge = data.method === 'llm'
+                                ? '<span style="background: #4CAF50; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">✨ Phi3 Enhanced</span>'
+                                : '<span style="background: #2196F3; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">📝 Template</span>';
+
+                            const metadataHtml = `
+                                <div style="background: #f0f8ff; padding: 15px; border-radius: 5px; margin-top: 15px;">
+                                    <h4 style="margin-top: 0;">📊 Prompt Metadata</h4>
+                                    <p><strong>Generation Method:</strong> ${methodBadge}</p>
+                                    <p><strong>Components Analyzed:</strong> ${selectedNames.length}</p>
+                                    <p><strong>Prompt Type:</strong> ${promptType}</p>
+                                </div>
+                            `;
+                            promptContentEl.innerHTML += metadataHtml;
+
+                            showToast('Prompt generated successfully!', 'success');
+                        } else if (data.type === 'error') {
+                            throw new Error(data.message);
+                        }
+                    } catch (parseError) {
+                        console.warn('Failed to parse SSE message:', line, parseError);
+                    }
+                }
+            }
+        }
     } catch (error) {
         console.error('Error generating prompt:', error);
         document.getElementById('promptContent').textContent = 'Error generating prompt. Please try again.';
-
-        const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-        showToast(`Error: ${errorMessage}`, 'error');
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -1305,4 +1431,71 @@ function showToast(message, type = 'success') {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+}
+
+// Progress Modal Functions
+function showProgressModal() {
+    const modal = document.getElementById('progressModal');
+    if (!modal) {
+        console.error('Progress modal not found in DOM');
+        return;
+    }
+
+    modal.classList.add('show');
+
+    // Reset modal state
+    stepsCompleted = 0;
+    document.getElementById('modalStepTitle').textContent = 'Initializing...';
+    document.getElementById('modalOverallPercent').textContent = '0%';
+    document.getElementById('modalOverallProgress').style.width = '0%';
+    document.getElementById('modalCurrentActivity').textContent = 'Starting indexing process...';
+    document.getElementById('modalStepsLog').innerHTML = '';
+    document.getElementById('stepsCount').textContent = '0 steps completed';
+    document.getElementById('modalStats').style.display = 'none';
+    document.getElementById('modalActionBtn').style.display = 'none';
+
+    // Show close button immediately so user can dismiss modal anytime
+    const modalClose = document.querySelector('.modal-close');
+    if (modalClose) modalClose.style.display = 'block';
+}
+
+function closeProgressModal() {
+    const modal = document.getElementById('progressModal');
+    modal.classList.remove('show');
+    
+    // Reset button state
+    document.getElementById('indexBtnText').style.display = 'inline';
+    document.getElementById('indexSpinner').style.display = 'none';
+}
+
+function addStepToLog(message, type) {
+    const stepsLog = document.getElementById('modalStepsLog');
+    if (!stepsLog) return;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    
+    const stepItem = document.createElement('div');
+    stepItem.className = 'step-item ' + type;
+    
+    const icons = {
+        'success': '✓',
+        'info': '→',
+        'warning': '⚠',
+        'error': '✗'
+    };
+    
+    const icon = icons[type] || '→';
+    
+    stepItem.innerHTML = '<span class="step-icon">' + icon + '</span><span class="step-text">[' + timestamp + '] ' + message + '</span>';
+    
+    stepsLog.appendChild(stepItem);
+    
+    // Auto-scroll to bottom
+    stepsLog.scrollTop = stepsLog.scrollHeight;
+    
+    // Update step count
+    if (type === 'success' || message.includes('✅')) {
+        stepsCompleted++;
+        document.getElementById('stepsCount').textContent = stepsCompleted + ' steps completed';
+    }
 }

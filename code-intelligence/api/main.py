@@ -26,6 +26,7 @@ from embeddings.vector_store import VectorStore
 from embeddings.semantic_enrichment import SemanticEnricher
 from prompt.context_builder import OntologyContextBuilder
 from prompt.template_engine import PromptTemplateEngine
+from prompt.phi3_prompt_engine import Phi3PromptEngine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -102,6 +103,7 @@ class PromptGenerationRequest(BaseModel):
     description: str
     components: List[str]  # Component names
     target_files: Optional[List[str]] = None
+    generation_method: Optional[str] = "llm"  # "llm" or "template"
 
 
 # Startup
@@ -253,6 +255,7 @@ def index_repository_background(repo_path: str):
 
         # Complete
         elapsed = (datetime.now() - start_time).total_seconds()
+        current_indexing_status["is_running"] = False
         current_indexing_status["is_complete"] = True
         current_indexing_status["success"] = True
         current_indexing_status["stats"] = {
@@ -264,6 +267,7 @@ def index_repository_background(repo_path: str):
         add_status(f"✅ COMPLETE! Indexed in {elapsed:.1f} seconds")
 
     except Exception as e:
+        current_indexing_status["is_running"] = False
         current_indexing_status["is_complete"] = True
         current_indexing_status["success"] = False
         current_indexing_status["status_messages"].append(f"❌ Error: {str(e)}")
@@ -384,7 +388,7 @@ async def query_context(request: QueryRequest):
 
 
 # Get component details
-@app.get("/api/components/{component_id}")
+@app.get("/api/components/{component_id:path}")
 async def get_component(
     component_id: str,
     include_dependencies: bool = Query(True),
@@ -807,29 +811,87 @@ async def generate_prompt(request: PromptGenerationRequest):
                     else:
                         full_context = context_builder.merge_contexts(full_context, comp_context)
 
-        # If no components found, return error with suggestions
+        # Critical validation: MUST have selected components
         if not components_found:
+            print("[PROMPT_GEN] ❌ No components selected - cannot generate prompt")
             return {
-                "error": "No components found in ontology",
+                "error": "Please select components before generating prompt",
                 "components_not_found": components_not_found,
-                "suggestion": "Please check component names. Available components can be listed via /api/components"
+                "suggestion": "Select at least one component from the ontology. Available components: /api/components"
             }
 
-        # Generate prompt using template engine
-        template_engine = PromptTemplateEngine()
+        # Generate prompt using user's selected method
+        print(f"[PROMPT_GEN] Starting prompt generation for type: {request.type}")
+        generated_prompt = None
+        generation_method_param = request.generation_method or "llm"
 
-        try:
-            generated_prompt = template_engine.generate(
-                prompt_type=request.type,
-                context=full_context,
-                user_description=request.description,
-                title=request.title
-            )
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid prompt type: {str(e)}. Available types: {template_engine.get_available_types()}"
-            )
+        if generation_method_param == "template":
+            # User explicitly requested template - skip LLM
+            print("[PROMPT_GEN] User selected template generation method")
+            template_engine = PromptTemplateEngine()
+            try:
+                generated_prompt = template_engine.generate(
+                    prompt_type=request.type,
+                    context=full_context,
+                    user_description=request.description,
+                    title=request.title
+                )
+                generation_method = "template"
+                print(f"[PROMPT_GEN] ✅ Template generation succeeded, prompt length: {len(generated_prompt)}")
+            except ValueError as e:
+                print(f"[PROMPT_GEN] ❌ Template generation failed: {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid prompt type: {str(e)}. Available types: {template_engine.get_available_types()}"
+                )
+        else:
+            # User requested LLM (or default)
+            generation_method = None
+            try:
+                # Try LLM-based generation first
+                print("[PROMPT_GEN] User selected LLM generation method, attempting to initialize Phi3 engine...")
+                phi3_engine = Phi3PromptEngine()
+                print("[PROMPT_GEN] Phi3 engine initialized, calling generate()...")
+
+                result = phi3_engine.generate(
+                    prompt_type=request.type,
+                    context=full_context,
+                    user_description=request.description,
+                    title=request.title
+                )
+
+                print(f"[PROMPT_GEN] Phi3 returned result with success={result.get('success')}, has_prompt={bool(result.get('prompt'))}")
+
+                # Check if LLM generation succeeded
+                if result.get("success") and result.get("prompt"):
+                    generated_prompt = result.get("prompt")
+                    generation_method = "llm"
+                    print(f"[PROMPT_GEN] ✅ LLM generation succeeded, prompt length: {len(generated_prompt)}")
+                else:
+                    # LLM returned failure, fall back to templates
+                    error_msg = result.get("error", "Unknown error")
+                    print(f"[PROMPT_GEN] ⚠️ LLM generation returned failure: {error_msg}, falling back to templates")
+                    raise RuntimeError(error_msg)
+
+            except (RuntimeError, Exception) as llm_error:
+                # Fallback to template-based generation if LLM fails
+                print(f"[PROMPT_GEN] ⚠️ LLM generation failed ({str(llm_error)}), falling back to templates")
+                template_engine = PromptTemplateEngine()
+                try:
+                    generated_prompt = template_engine.generate(
+                        prompt_type=request.type,
+                        context=full_context,
+                        user_description=request.description,
+                        title=request.title
+                    )
+                    generation_method = "template"
+                    print(f"[PROMPT_GEN] ✅ Template generation succeeded, prompt length: {len(generated_prompt)}")
+                except ValueError as e:
+                    print(f"[PROMPT_GEN] ❌ Template generation also failed: {e}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid prompt type: {str(e)}. Available types: {template_engine.get_available_types()}"
+                    )
 
         # Build response
         return {
@@ -860,7 +922,8 @@ async def generate_prompt(request: PromptGenerationRequest):
                 "component_count": len(components_found),
                 "has_source_code": bool(full_context.get("file_content")),
                 "generated_at": datetime.utcnow().isoformat(),
-                "available_prompt_types": template_engine.get_available_types(),
+                "generation_method": generation_method,
+                "available_prompt_types": ["new_feature", "feature_extension", "enhancement", "bug_fix", "refactoring", "analysis"],
                 "validation": full_context.get("validation", {}),
                 "categorized_dependencies": full_context.get("categorized_dependencies", {}),
                 "constructor_dependencies": full_context.get("constructor_dependencies", []),
@@ -874,6 +937,130 @@ async def generate_prompt(request: PromptGenerationRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Prompt generation failed: {str(e)}")
+
+
+# Generate ontology-guided prompt with streaming
+@app.post("/api/prompt/generate/stream")
+async def generate_prompt_stream(request: PromptGenerationRequest):
+    """
+    Generate ontology-guided prompt with real-time streaming.
+
+    Provides token-by-token streaming for better UX during long LLM generations.
+    Eliminates timeout issues and provides real-time feedback.
+
+    Returns Server-Sent Events (SSE) stream.
+    """
+    if not index_data or not graph_builder:
+        raise HTTPException(
+            status_code=503,
+            detail="System not initialized. Please index a repository first."
+        )
+
+    async def generate():
+        """Async generator for streaming response."""
+        try:
+            # Step 1: Build context (same as regular endpoint)
+            context_builder = OntologyContextBuilder(index_data, graph_builder.graph)
+            full_context = {}
+            components_found = []
+            components_not_found = []
+
+            for component_name in request.components:
+                comp_context = context_builder.build_context_strict(component_name)
+
+                if 'error' in comp_context:
+                    components_not_found.append({
+                        'name': component_name,
+                        'error': comp_context['error']
+                    })
+                else:
+                    validation = comp_context.get('validation', {})
+                    if validation.get('errors'):
+                        components_not_found.append({
+                            'name': component_name,
+                            'error': f"Validation failed: {'; '.join(validation['errors'])}"
+                        })
+                    else:
+                        components_found.append(comp_context.get('component', {}))
+                        if not full_context:
+                            full_context = comp_context
+                        else:
+                            full_context = context_builder.merge_contexts(full_context, comp_context)
+
+            # Validate components
+            if not components_found:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Please select components before generating prompt'})}\n\n"
+                return
+
+            # Step 2: Generate based on user's selected method
+            generation_method = request.generation_method or "llm"
+
+            if generation_method == "template":
+                # User explicitly requested template - skip LLM
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Using template engine...', 'progress': 20})}\n\n"
+
+                template_engine = PromptTemplateEngine()
+                prompt = template_engine.generate(
+                    prompt_type=request.type,
+                    context=full_context,
+                    user_description=request.description,
+                    title=request.title
+                )
+
+                yield f"data: {json.dumps({'type': 'complete', 'full_prompt': prompt, 'method': 'template'})}\n\n"
+
+            else:
+                # User requested LLM (or default)
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing Phi3...', 'progress': 10})}\n\n"
+
+                try:
+                    phi3_engine = Phi3PromptEngine()
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Generating prompt with Phi3...', 'progress': 20})}\n\n"
+
+                    # Stream chunks from Phi3
+                    accumulated = ""
+                    for chunk in phi3_engine.generate_stream(
+                        prompt_type=request.type,
+                        context=full_context,
+                        user_description=request.description,
+                        title=request.title
+                    ):
+                        accumulated += chunk
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+
+                    # Send completion
+                    yield f"data: {json.dumps({'type': 'complete', 'full_prompt': accumulated, 'method': 'llm'})}\n\n"
+
+                except Exception as llm_error:
+                    # Fallback to template (non-streaming)
+                    print(f"[STREAM] LLM failed, falling back to template: {llm_error}")
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'LLM unavailable, using template fallback...', 'progress': 50})}\n\n"
+
+                    template_engine = PromptTemplateEngine()
+                    prompt = template_engine.generate(
+                        prompt_type=request.type,
+                        context=full_context,
+                        user_description=request.description,
+                        title=request.title
+                    )
+
+                    # Send complete template-generated prompt
+                    yield f"data: {json.dumps({'type': 'complete', 'full_prompt': prompt, 'method': 'template'})}\n\n"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
 
 
 # Get available prompt types

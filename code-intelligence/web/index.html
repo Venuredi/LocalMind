@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Code Intelligence System</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/dist/vis-network.min.css" rel="stylesheet">
+    <script src="/static/axios.min.js"></script>
+    <script src="/static/vis-network.min.js"></script>
+    <link href="/static/vis-network.min.css" rel="stylesheet">
     <style>
         .wizard-progress {
             display: flex;
@@ -229,6 +229,22 @@ Examples:
                         <!-- Populated dynamically -->
                     </div>
 
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="font-weight: bold; margin-bottom: 10px; display: block;">Generation Method</label>
+                        <div style="display: flex; gap: 20px; align-items: center;">
+                            <label style="display: flex; align-items: center; cursor: pointer;">
+                                <input type="radio" name="generationMethod" value="llm" checked style="margin-right: 8px;">
+                                <span>✨ Universal Prompt (LLM)</span>
+                                <small style="margin-left: 8px; color: #666;">(Uses Phi3 for intelligent prompt generation)</small>
+                            </label>
+                            <label style="display: flex; align-items: center; cursor: pointer;">
+                                <input type="radio" name="generationMethod" value="template" style="margin-right: 8px;">
+                                <span>📝 Prompt Template</span>
+                                <small style="margin-left: 8px; color: #666;">(Uses predefined templates)</small>
+                            </label>
+                        </div>
+                    </div>
+
                     <div class="action-buttons">
                         <button onclick="goToPromptStep(1)" class="btn btn-secondary">⬅️ Back</button>
                         <button onclick="generatePrompt()" class="btn btn-primary">🤖 Generate Final Prompt</button>
@@ -294,6 +310,52 @@ Examples:
     <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
 
-    <script src="/static/app.js?v=2"></script>
+    <!-- Progress Modal -->
+    <div id="progressModal" class="modal">
+        <div class="modal-content progress-modal">
+            <div class="modal-header">
+                <h2>🔍 Indexing Repository</h2>
+                <button class="modal-close" onclick="closeProgressModal()" style="display: none;">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Overall Progress -->
+                <div class="progress-section">
+                    <div class="progress-title" id="modalStepTitle">Initializing...</div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-label">
+                            <span>Overall Progress</span>
+                            <span id="modalOverallPercent">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-bar-fill" id="modalOverallProgress"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Current Activity -->
+                <div class="current-activity">
+                    <div class="activity-label">Current Activity:</div>
+                    <div class="activity-text" id="modalCurrentActivity">Starting indexing process...</div>
+                </div>
+
+                <!-- Detailed Steps Log -->
+                <div class="steps-log-container">
+                    <div class="steps-log-header">
+                        <span>Detailed Progress</span>
+                        <span id="stepsCount">0 steps completed</span>
+                    </div>
+                    <div class="steps-log" id="modalStepsLog"></div>
+                </div>
+
+                <!-- Statistics (shown after completion) -->
+                <div id="modalStats" class="modal-stats" style="display: none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="modalActionBtn" class="btn btn-secondary" onclick="closeProgressModal()" style="display: none;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=14"></script>
 </body>
 </html>

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # LocalMind Code Intelligence Application
+  localmind:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: localmind-app
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount data directory for persistent storage
+      - ./data:/app/data
+      # Mount repository to index (update path as needed)
+      - ${REPO_PATH:-/tmp/repo}:/workspace:ro
+    depends_on:
+      - ollama
+    networks:
+      - localmind-network
+    restart: unless-stopped
+
+  # Ollama LLM Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: localmind-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - localmind-network
+    restart: unless-stopped
+    # Uncomment for GPU support (requires nvidia-docker)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  localmind-network:
+    driver: bridge
+
+volumes:
+  ollama-data:
+    driver: local

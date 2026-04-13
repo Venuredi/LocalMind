@@ -100,14 +100,24 @@ class OntologyContextBuilder:
         return context
 
     def _find_component(self, component_name: str) -> Optional[Dict[str, Any]]:
-        """Find a component by name."""
-        # Try exact match first
+        """Find a component by name or ID."""
+        # Try exact match on ID first (most specific)
+        for comp in self.components:
+            if comp.get('id') == component_name:
+                return comp
+
+        # Try exact match on name
         for comp in self.components:
             if comp.get('name') == component_name:
                 return comp
 
-        # Try case-insensitive match
+        # Try case-insensitive match on ID
         component_name_lower = component_name.lower()
+        for comp in self.components:
+            if comp.get('id', '').lower() == component_name_lower:
+                return comp
+
+        # Try case-insensitive match on name
         for comp in self.components:
             if comp.get('name', '').lower() == component_name_lower:
                 return comp
@@ -408,10 +418,14 @@ class OntologyContextBuilder:
 
     def extract_constructor_dependencies(self, code: str) -> List[str]:
         """
-        Extract dependencies from TypeScript/JavaScript constructor.
+        Extract dependencies from constructor/DI patterns across multiple languages.
 
-        Parses patterns like:
-        constructor(private readonly repo: RepoService, private service: MyService)
+        Supports:
+        - TypeScript/JavaScript: constructor(private readonly repo: RepoService)
+        - C#: public MyService(IUserRepository repo, ILogger logger)
+        - Go: func NewMyService(repo UserRepository, logger Logger)
+        - PHP: public function __construct(UserRepository $repo, Logger $logger)
+        - Python: def __init__(self, repo: UserRepository, logger: Logger)
 
         Returns:
             List of dependency class names (e.g., ['RepoService', 'MyService'])
@@ -419,17 +433,47 @@ class OntologyContextBuilder:
         if not code:
             return []
 
-        # Find constructor
-        pattern = r'constructor\s*\((.*?)\)'
-        match = re.search(pattern, code, re.DOTALL)
+        deps = []
 
-        if not match:
-            return []
+        # TypeScript/JavaScript constructor pattern
+        ts_pattern = r'constructor\s*\((.*?)\)'
+        ts_match = re.search(ts_pattern, code, re.DOTALL)
+        if ts_match:
+            params = ts_match.group(1)
+            # Extract type annotations (after ':')
+            deps.extend(re.findall(r':\s*([A-Za-z0-9_]+)', params))
 
-        params_block = match.group(1)
+        # C# constructor pattern: public ClassName(IType param1, Type param2)
+        cs_pattern = r'public\s+\w+\s*\((.*?)\)'
+        cs_match = re.search(cs_pattern, code, re.DOTALL)
+        if cs_match:
+            params = cs_match.group(1)
+            # Extract types (interface or class names before parameter names)
+            deps.extend(re.findall(r'\b(I[A-Z]\w+|[A-Z]\w+(?:Service|Repository|Logger|Factory|Provider|Client))\s+\w+', params))
 
-        # Extract type annotations (what comes after ':')
-        deps = re.findall(r':\s*([A-Za-z0-9_]+)', params_block)
+        # Go factory function pattern: func NewXxx(repo UserRepository, logger Logger)
+        go_pattern = r'func\s+New\w+\s*\((.*?)\)'
+        go_match = re.search(go_pattern, code, re.DOTALL)
+        if go_match:
+            params = go_match.group(1)
+            # Extract types (capitalized names after parameter names)
+            deps.extend(re.findall(r'\w+\s+\*?([A-Z]\w+)', params))
+
+        # PHP constructor pattern: public function __construct(Type $param)
+        php_pattern = r'function\s+__construct\s*\((.*?)\)'
+        php_match = re.search(php_pattern, code, re.DOTALL)
+        if php_match:
+            params = php_match.group(1)
+            # Extract types (before $variable)
+            deps.extend(re.findall(r'([A-Z]\w+)\s+\$\w+', params))
+
+        # Python __init__ pattern: def __init__(self, repo: UserRepository, logger: Logger)
+        py_pattern = r'def\s+__init__\s*\((.*?)\)'
+        py_match = re.search(py_pattern, code, re.DOTALL)
+        if py_match:
+            params = py_match.group(1)
+            # Extract type hints (after ':')
+            deps.extend(re.findall(r':\s*([A-Z]\w+)', params))
 
         # Deduplicate and sort
         return sorted(list(set(deps)))
@@ -439,27 +483,68 @@ class OntologyContextBuilder:
         Detect technology stack from file path with strict categorization.
 
         Returns:
-            'nestjs-backend', 'react-frontend', 'flutter-mobile', or 'unknown'
+            Stack identifier (e.g., 'nestjs-backend', 'aspnet-core', 'go-gin', etc.) or 'unknown'
         """
         file_path_lower = file_path.lower()
 
-        # Backend detection
-        if any(keyword in file_path_lower for keyword in [
-            'backend', 'backend-service', 'api', 'server', '/services/', '/repositories/'
-        ]):
-            return 'nestjs-backend'
+        # C# / ASP.NET Core detection
+        if '.cs' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in ['controller', 'api', 'service']):
+                return 'aspnet-core'
+            return 'csharp-app'
 
-        # Frontend web detection
-        if any(keyword in file_path_lower for keyword in [
-            'frontend', 'web', 'react', '/components/', '/pages/', '/hooks/'
-        ]):
-            return 'react-frontend'
+        # Go detection (check for framework patterns)
+        if '.go' in file_path_lower:
+            # Check for common Go web frameworks
+            if any(keyword in file_path_lower for keyword in ['handler', 'controller', 'router', 'api']):
+                return 'go-backend'
+            return 'go-app'
 
-        # Mobile detection
-        if any(keyword in file_path_lower for keyword in [
-            'mobile', 'flutter', 'dart', '/lib/', '/screens/'
-        ]):
-            return 'flutter-mobile'
+        # PHP detection
+        if '.php' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in ['controller', 'api', 'app/http']):
+                return 'laravel-backend'
+            return 'php-app'
+
+        # Python detection
+        if '.py' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in ['api', 'views', 'routes', 'endpoints']):
+                # Will be refined by content analysis
+                return 'python-backend'
+            return 'python-app'
+
+        # TypeScript NestJS detection (specific patterns)
+        if '.ts' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in [
+                'backend', 'backend-service', 'api', 'server', '/services/', '/repositories/'
+            ]):
+                return 'nestjs-backend'
+            # Could be Express or other TS backend
+            if any(keyword in file_path_lower for keyword in ['routes', 'controllers', 'middleware']):
+                return 'express-backend'
+            return 'typescript-app'
+
+        # JavaScript detection
+        if '.js' in file_path_lower or '.mjs' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in ['routes', 'controllers', 'api', 'middleware']):
+                return 'express-backend'
+            return 'javascript-app'
+
+        # React frontend detection (JSX/TSX)
+        if '.tsx' in file_path_lower or '.jsx' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in [
+                'frontend', 'web', 'react', '/components/', '/pages/', '/hooks/'
+            ]):
+                return 'react-frontend'
+            return 'react-app'
+
+        # Flutter mobile detection
+        if '.dart' in file_path_lower:
+            if any(keyword in file_path_lower for keyword in [
+                'mobile', 'flutter', '/lib/', '/screens/'
+            ]):
+                return 'flutter-mobile'
+            return 'dart-app'
 
         return 'unknown'
 
@@ -585,7 +670,10 @@ class OntologyContextBuilder:
 
         # Check stack detection
         stack = context.get('tech_stack', 'unknown')
-        if stack == 'unknown':
+        layer = context.get('layer', 'unknown')
+
+        # Allow unknown stack for infrastructure components (Terraform, Helm, K8s, etc.)
+        if stack == 'unknown' and layer != 'infrastructure':
             validation['errors'].append(
                 "Stack detection failed - cannot determine if backend/frontend"
             )

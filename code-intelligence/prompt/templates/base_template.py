@@ -106,10 +106,68 @@ Follow this strict architecture:
         """
         GAP 2 FIX: Get architecture rules based on tech_stack, not layer.
         Prevents mixing frontend and backend rules.
+        Supports: NestJS, ASP.NET Core, Go, Laravel, Express, Python backends + React, Flutter
         """
         stack_lower = tech_stack.lower()
 
-        if 'nestjs-backend' in stack_lower or 'backend' in stack_lower:
+        # C# / ASP.NET Core
+        if 'aspnet-core' in stack_lower or 'csharp' in stack_lower:
+            return """**ASP.NET Core Backend Architecture (STRICT):**
+- **Controller** → handles HTTP requests, delegates to Service
+- **Service** → contains ALL business logic, calls Repository
+- **Repository** → handles ALL database access (Entity Framework)
+- **NO direct DbContext access** from Services (use Repository)
+- **NO Repository calls** from Controllers (use Service)
+- DTOs for request/response (data transfer)
+- Entities for database models
+- Dependency Injection via constructor (IServiceCollection)"""
+
+        # Go backend
+        elif 'go-backend' in stack_lower or 'go-app' in stack_lower:
+            return """**Go Backend Architecture (STRICT):**
+- **Handler** → handles HTTP requests, delegates to Service
+- **Service** → contains ALL business logic, calls Repository
+- **Repository** → handles ALL database access
+- **NO direct database access** from Handlers (use Service)
+- Use structs for dependency injection (constructor pattern)
+- Use interfaces for testability
+- Structs for DTOs and models"""
+
+        # PHP / Laravel
+        elif 'laravel-backend' in stack_lower or 'php' in stack_lower:
+            return """**Laravel Backend Architecture (STRICT):**
+- **Controller** → handles HTTP requests, delegates to Service
+- **Service** → contains ALL business logic, calls Repository
+- **Repository/Model** → handles database access (Eloquent ORM)
+- **NO direct database queries** from Controllers (use Service)
+- Dependency Injection via constructor (Service Container)
+- Request classes for validation
+- Resources for API responses"""
+
+        # JavaScript / Express
+        elif 'express-backend' in stack_lower and 'javascript' in stack_lower:
+            return """**Express.js Backend Architecture (STRICT):**
+- **Router** → defines routes, delegates to Controller
+- **Controller** → handles requests, calls Service
+- **Service** → contains ALL business logic, calls Repository/Model
+- **Repository/Model** → handles database access
+- **NO direct database access** from Routes (use Service)
+- Middleware for auth, validation, error handling
+- DTOs/Schemas for validation"""
+
+        # Python backends (FastAPI, Flask, Django)
+        elif 'python-backend' in stack_lower or 'python-app' in stack_lower:
+            return """**Python Backend Architecture (STRICT):**
+- **Router/View** → handles HTTP requests, delegates to Service
+- **Service** → contains ALL business logic, calls Repository
+- **Repository/Model** → handles database access (SQLAlchemy/ORM)
+- **NO direct database access** from Routes (use Service)
+- Dependency Injection via FastAPI Depends() or constructor
+- Pydantic models for request/response validation
+- ORM models for database"""
+
+        # TypeScript NestJS (existing)
+        elif 'nestjs-backend' in stack_lower:
             return """**NestJS Backend Architecture (STRICT):**
 - **Controller** → handles HTTP, delegates to Service
 - **Service** → contains ALL business logic, calls Repositories
@@ -119,7 +177,19 @@ Follow this strict architecture:
 - DTOs for request/response validation
 - Entities for database models"""
 
-        elif 'react-frontend' in stack_lower or 'frontend' in stack_lower:
+        # TypeScript Express
+        elif 'express-backend' in stack_lower and 'typescript' in stack_lower:
+            return """**Express.js (TypeScript) Backend Architecture (STRICT):**
+- **Router** → defines routes, delegates to Controller
+- **Controller** → handles requests, calls Service
+- **Service** → contains ALL business logic, calls Repository
+- **Repository** → handles database access
+- **NO direct database access** from Routes (use Service)
+- TypeScript interfaces for type safety
+- DTOs for validation"""
+
+        # React Frontend (existing)
+        elif 'react-frontend' in stack_lower or 'react-app' in stack_lower:
             return """**React Frontend Architecture (STRICT):**
 - **Pages** → route handling, composition
 - **Components** → presentational UI
@@ -128,7 +198,8 @@ Follow this strict architecture:
 - **NO direct API calls** from Components (use hooks/services)
 - Props for component communication"""
 
-        elif 'flutter-mobile' in stack_lower or 'mobile' in stack_lower:
+        # Flutter Mobile (existing)
+        elif 'flutter-mobile' in stack_lower or 'dart-app' in stack_lower:
             return """**Flutter Mobile Architecture (STRICT):**
 - **Screens** → route handling, composition
 - **Widgets** → presentational UI
@@ -136,6 +207,7 @@ Follow this strict architecture:
 - **Services** → API calls, business logic
 - **NO direct API calls** from Widgets (use Providers)"""
 
+        # Generic fallback
         else:
             return """**General Architecture:**
 - Follow existing patterns in codebase

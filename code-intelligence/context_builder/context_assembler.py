@@ -393,6 +393,7 @@ class ContextAssembler:
                 "frontend-web": [],
                 "backend": [],
                 "data": [],
+                "infrastructure": [],
             },
             "infrastructure": [],
             "api_contracts": [],
@@ -424,6 +425,7 @@ class ContextAssembler:
 
             # Build component context
             comp_context = {
+                "id": component["id"],
                 "name": component["name"],
                 "type": component["type"],
                 "file_path": component["file_path"],
