@@ -12,9 +12,9 @@ A comprehensive code intelligence system that understands multi-stack repositori
 - **User-Selectable Options**: Radio button UI to select generation method
 
 ### 🔍 Multi-Language Code Parsing
-Supports 10+ languages and frameworks:
+Supports 15+ languages and frameworks:
 - **Frontend**: React, Angular, Flutter (Dart)
-- **Backend**: NestJS (TypeScript), Express.js, ASP.NET Core (C#), Go, PHP/Laravel, Python (Django/Flask)
+- **Backend**: Spring Boot (Java), NestJS (TypeScript), Express.js, ASP.NET Core (C#), Go, PHP/Laravel, Python (Django/Flask)
 - **Infrastructure**: Terraform (HCL), ArgoCD (Kubernetes YAML)
 
 ### 🌐 Cross-Layer Traceability
@@ -295,6 +295,7 @@ GET    /api/stats                    # Get system statistics
 | Category | Languages/Frameworks | Parser |
 |----------|---------------------|--------|
 | **Frontend** | React, Angular, Flutter/Dart | Tree-sitter, Custom |
+| **Backend (Enterprise Java)** | Spring Boot (Java) | Custom, Regex |
 | **Backend (JavaScript)** | NestJS, Express.js | Tree-sitter, Custom |
 | **Backend (Typed)** | TypeScript, C#/ASP.NET Core | Tree-sitter |
 | **Backend (Systems)** | Go, Python (Django/Flask) | Tree-sitter, AST |

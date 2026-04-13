@@ -18,6 +18,7 @@ from parsers.flutter.flutter_parser import FlutterParser
 from parsers.terraform.terraform_parser import TerraformParser
 from parsers.argocd.argocd_parser import ArgoCDParser
 from parsers.angular.angular_parser import AngularParser
+from parsers.springboot.springboot_parser import SpringBootParser
 
 # Import universal parser for ALL languages
 from parsers.treesitter.tree_sitter_parser import TreeSitterParser
@@ -69,6 +70,9 @@ class UnifiedIndexer:
         self._progress("⚙️  Parsing NestJS (Backend)...")
         nestjs_data = self._parse_nestjs()
 
+        self._progress("☕ Parsing Spring Boot (Backend)...")
+        springboot_data = self._parse_springboot()
+
         self._progress("🏗️  Parsing Terraform (Infrastructure)...")
         terraform_data = self._parse_terraform()
 
@@ -82,7 +86,7 @@ class UnifiedIndexer:
         # Combine into unified index
         self._progress("🔗 Building unified index...")
         self._build_unified_index(
-            flutter_data, react_data, angular_data, nestjs_data, terraform_data, argocd_data, treesitter_data
+            flutter_data, react_data, angular_data, nestjs_data, springboot_data, terraform_data, argocd_data, treesitter_data
         )
 
         # Extract relationships
@@ -187,6 +191,56 @@ class UnifiedIndexer:
         parser = AngularParser(str(self.repo_path))
         return parser.parse()
 
+    def _parse_springboot(self) -> Dict[str, Any]:
+        """Parse Spring Boot layer - auto-detect by scanning for .java files with Spring annotations."""
+        # Look for Java files
+        java_files = list(self.repo_path.rglob("*.java"))
+
+        if not java_files:
+            return {}
+
+        # Check for Spring Boot indicators (pom.xml, build.gradle, or Spring annotations)
+        has_spring = False
+
+        # Check for Maven or Gradle files
+        spring_indicators = (
+            list(self.repo_path.rglob("pom.xml")) +
+            list(self.repo_path.rglob("build.gradle")) +
+            list(self.repo_path.rglob("build.gradle.kts"))
+        )
+
+        if spring_indicators:
+            # Verify it's actually Spring Boot by checking build files
+            for build_file in spring_indicators[:5]:  # Check first 5
+                try:
+                    content = build_file.read_text()
+                    if "spring-boot" in content.lower() or "springframework" in content:
+                        has_spring = True
+                        break
+                except:
+                    pass
+
+        # Fallback: check for Spring annotations in Java files
+        if not has_spring:
+            for java_file in java_files[:20]:  # Check first 20 Java files
+                try:
+                    content = java_file.read_text()
+                    if any(anno in content for anno in [
+                        "@SpringBootApplication", "@RestController", "@Service",
+                        "@Repository", "@Entity", "@Component", "@Configuration"
+                    ]):
+                        has_spring = True
+                        break
+                except:
+                    pass
+
+        if not has_spring:
+            return {}
+
+        # Parse from repository root
+        parser = SpringBootParser(str(self.repo_path))
+        return parser.parse()
+
     def _parse_terraform(self) -> Dict[str, Any]:
         """Parse Terraform layer - auto-detect by scanning for .tf files."""
         # Look for .tf files anywhere in the repository
@@ -256,6 +310,7 @@ class UnifiedIndexer:
         react_data: Dict,
         angular_data: Dict,
         nestjs_data: Dict,
+        springboot_data: Dict,
         terraform_data: Dict,
         argocd_data: Dict,
         treesitter_data: Dict,
@@ -361,6 +416,31 @@ class UnifiedIndexer:
 
         for module in nestjs_data.get("modules", []):
             self.index["components"].append(self._normalize_component(module))
+
+        # Add Spring Boot components
+        for controller in springboot_data.get("controllers", []):
+            self.index["components"].append(self._normalize_component(controller))
+
+        for service in springboot_data.get("services", []):
+            self.index["components"].append(self._normalize_component(service))
+
+        for repository in springboot_data.get("repositories", []):
+            self.index["components"].append(self._normalize_component(repository))
+
+        for entity in springboot_data.get("entities", []):
+            self.index["components"].append(self._normalize_component(entity))
+
+        for dto in springboot_data.get("dtos", []):
+            self.index["components"].append(self._normalize_component(dto))
+
+        for configuration in springboot_data.get("configurations", []):
+            self.index["components"].append(self._normalize_component(configuration))
+
+        for component in springboot_data.get("components", []):
+            self.index["components"].append(self._normalize_component(component))
+
+        for rest_client in springboot_data.get("rest_clients", []):
+            self.index["components"].append(self._normalize_component(rest_client))
 
         # Add infrastructure components
         for resource in terraform_data.get("resources", []):
@@ -633,8 +713,9 @@ class UnifiedIndexer:
         return from_layer != to_layer
 
     def _extract_api_contracts(self):
-        """Extract API contracts from controllers."""
+        """Extract API contracts from controllers (NestJS and Spring Boot)."""
         for component in self.index["components"]:
+            # Handle NestJS controllers
             if component["type"] == "controller":
                 routes = component.get("metadata", {}).get("routes", [])
 
@@ -647,6 +728,26 @@ class UnifiedIndexer:
                         "dtos": route.get("dtos", []),
                         "service_calls": route.get("service_calls", []),
                         "layer": "backend",
+                        "framework": "nestjs",
+                    }
+
+                    self.index["apis"].append(contract)
+
+            # Handle Spring Boot REST controllers
+            elif component["type"] == "rest_controller":
+                endpoints = component.get("metadata", {}).get("endpoints", [])
+
+                for endpoint in endpoints:
+                    contract = {
+                        "endpoint": endpoint.get("path"),
+                        "method": endpoint.get("method"),
+                        "handler": f"{component['id']}.{endpoint.get('handler')}",
+                        "controller": component["id"],
+                        "path_variables": endpoint.get("path_variables", []),
+                        "has_request_body": endpoint.get("has_request_body", False),
+                        "requires_auth": endpoint.get("requires_auth", False),
+                        "layer": "backend",
+                        "framework": "spring-boot",
                     }
 
                     self.index["apis"].append(contract)
