@@ -3,6 +3,8 @@ Phi3 Prompt Engine
 
 Orchestrates LLM-based prompt generation using Phi3 while maintaining
 ontology constraints and preventing hallucinations.
+
+Token-aware: Manages input/output to fit within 2048 token limit.
 """
 
 from typing import Dict, Any, Optional
@@ -19,6 +21,20 @@ from prompt.ontology_formatter import OntologyFormatter
 from prompt.prompt_validator import PromptValidator
 
 logger = logging.getLogger(__name__)
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    Estimate token count for text.
+
+    Uses a conservative estimate of ~4 characters per token.
+    This is approximate but works well for English text and code.
+    """
+    if not text:
+        return 0
+    # Rough estimate: 1 token ≈ 4 characters for English
+    # Add 10% buffer for safety
+    return int(len(text) / 4 * 1.1)
 
 
 class Phi3PromptEngine:
@@ -67,6 +83,8 @@ class Phi3PromptEngine:
         """
         Generate ontology-guided prompt using Phi3.
 
+        Token-aware: Manages input size to allow adequate output space.
+
         Args:
             prompt_type: Type of prompt (enhancement, bug_fix, etc.)
             context: Ontology context from OntologyContextBuilder
@@ -100,7 +118,24 @@ class Phi3PromptEngine:
                 prompt_type
             )
 
-            logger.info(f"Generating prompt with Phi3 (type: {prompt_type}, stack: {tech_stack})")
+            # Step 4.5: Token budget check
+            input_tokens = estimate_tokens(system_prompt) + estimate_tokens(phi3_input)
+            # Reserve tokens for output (aim for ~1500 output tokens to stay safe)
+            max_input_tokens = 2500  # Phi3 context is ~4096, reserve for output
+
+            if input_tokens > max_input_tokens:
+                logger.warning(f"Input too large ({input_tokens} tokens), trimming context")
+                # Reduce context by using shorter description
+                user_request = self.formatter.format_user_request(
+                    prompt_type, title, user_description[:200]
+                )
+                phi3_input = self._build_phi3_input(
+                    ontology_context,
+                    user_request,
+                    prompt_type
+                )
+
+            logger.info(f"Generating prompt with Phi3 (type: {prompt_type}, stack: {tech_stack}, input_tokens: ~{estimate_tokens(phi3_input)})")
 
             # Step 5: Generate with Phi3
             generated_prompt = self.phi3_service.generate(

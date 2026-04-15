@@ -27,97 +27,67 @@ class SystemInstructions:
     @staticmethod
     def _get_prompt_optimizer_instructions() -> str:
         """
-        Clean, minimal system prompt for Phi3.
+        Concise system prompt for Phi3 optimized for 2048 token output.
 
-        Focuses on: Minimal + Bounded + Deterministic
-        NOT: Complete + Intelligent + Safe
-
-        ~250 tokens total.
+        Key principles:
+        - Structured but compact
+        - No verbose explanations
+        - Direct, actionable instructions
+        - Must complete within token limit
         """
-        return """You are a Prompt Engineering Assistant.
+        return """You are a Prompt Engineering Assistant. Generate CONCISE, COMPLETE prompts within 1500 tokens.
 
-Generate a structured prompt for AI coding assistants based on user input and component context.
+CRITICAL RULES:
+1. Be BRIEF - no verbose explanations or repetitive text
+2. Use bullet points, not paragraphs
+3. One line per constraint/rule
+4. MUST complete all sections - never cut off mid-sentence
 
-OUTPUT STRUCTURE:
+OUTPUT STRUCTURE (follow exactly):
 
 ======================================================================
 🔒 CONTEXT ENFORCEMENT (MANDATORY)
 ======================================================================
 
-You are provided with LIMITED CONTEXT.
-
 ALLOWED COMPONENTS:
-[List each component with file path and type]
+- [file_path] ([type]): [one-line description]
 
-You MUST:
-- Operate ONLY within these components
-- NOT assume external services or dependencies
-- NOT modify files outside this scope
-
-If required information is missing:
-→ STOP and report under "MISSING CONTEXT"
+USER REQUEST: [Brief task description in 1-2 sentences]
 
 ======================================================================
 🔒 EXECUTION MODE
 ======================================================================
-
-- No assumptions
-- No hallucination
+- No assumptions beyond given context
+- No hallucination of dependencies
 - Preserve existing functionality
-- Apply minimal, safe improvements only
 
 ======================================================================
 🎯 TASK OBJECTIVE
 ======================================================================
+- [Primary goal in one sentence]
 
-[Clear, specific task from user input]
+Focus: [2-3 bullet points max]
 
-Focus on: [Key goals]
-
-Do NOT: [Anti-patterns]
+Do NOT: [2-3 anti-patterns max]
 
 ======================================================================
 📦 CONTEXT
 ======================================================================
+System Type: [Backend/Frontend/Infrastructure] – [Language]
 
-System Type: [Infrastructure/Backend/Frontend/Fullstack]
-
-Target Components:
-[List file paths only]
+Target Components: [file paths only, comma-separated]
 
 ======================================================================
 📏 CONSTRAINTS
 ======================================================================
-
-- Modify ONLY the listed components
-- Keep all existing functionality unchanged
-- Keep changes minimal and focused
-- Avoid introducing new dependencies
-
-======================================================================
-📤 OUTPUT FORMAT
-======================================================================
-
-### 1. CHANGES SUMMARY
-- List of improvements
-
-### 2. UPDATED CODE
-- Only modified sections
-- Add comments explaining changes
-
-### 3. MISSING CONTEXT (if any)
-- Clearly explain what is missing
-
-======================================================================
-🚫 FAILURE CONDITION
-======================================================================
-
-If task cannot be completed safely within constraints:
-→ STOP and populate "MISSING CONTEXT"
+- Modify ONLY listed components
+- Keep existing functionality
+- No new dependencies
+- Minimal, focused changes
 
 ======================================================================
 
-Generate ONLY this structured prompt. No extra details."""
+IMPORTANT: Complete the prompt properly. Do not trail off or leave sections incomplete."""
 
     @staticmethod
     def get_anti_hallucination_rules() -> str:

@@ -1,10 +1,78 @@
 """Phi3 LLM service using Ollama for ontology-guided prompt generation."""
 
 import ollama
+import re
 from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_complete_output(text: str) -> str:
+    """
+    Post-process LLM output to ensure it ends cleanly without mid-sentence truncation.
+
+    Strategies:
+    1. If ends with section divider, keep as-is
+    2. If ends mid-sentence, find last complete sentence/section
+    3. Add proper closing if truncated
+    """
+    if not text:
+        return text
+
+    text = text.rstrip()
+
+    # Check if already ends cleanly
+    clean_endings = [
+        '======================================================================',
+        '```',
+        '.',
+        '!',
+        '?',
+        ':',
+        '- ',
+        '\n',
+    ]
+
+    for ending in clean_endings:
+        if text.endswith(ending):
+            return text
+
+    # Find last complete section (marked by ===== divider)
+    section_pattern = r'={50,}'
+    sections = list(re.finditer(section_pattern, text))
+
+    if sections:
+        # Find the last complete section
+        last_section_end = sections[-1].end()
+
+        # Look for content after the last divider
+        remaining = text[last_section_end:].strip()
+
+        # If remaining content is incomplete (no proper ending), trim to last complete section
+        if remaining and not any(remaining.endswith(e.strip()) for e in clean_endings if e.strip()):
+            # Find last sentence end in remaining
+            sentence_ends = [remaining.rfind('.'), remaining.rfind('!'), remaining.rfind('?'), remaining.rfind('\n-')]
+            last_sentence = max(sentence_ends)
+
+            if last_sentence > 0:
+                text = text[:last_section_end] + '\n' + remaining[:last_sentence + 1]
+            else:
+                # No complete sentence, just use up to last divider
+                text = text[:last_section_end]
+    else:
+        # No section dividers, find last complete sentence
+        sentence_ends = [text.rfind('. '), text.rfind('.\n'), text.rfind('!\n'), text.rfind('?\n')]
+        last_sentence = max(sentence_ends)
+
+        if last_sentence > len(text) * 0.7:  # Only truncate if we keep most of the content
+            text = text[:last_sentence + 1]
+
+    # Add closing divider if prompt looks incomplete
+    if '🔒 CONTEXT ENFORCEMENT' in text and not text.rstrip().endswith('='):
+        text = text.rstrip() + '\n\n======================================================================'
+
+    return text
 
 
 class Phi3Service:
@@ -67,8 +135,14 @@ class Phi3Service:
             )
 
             generated_text = response['message']['content']
-            logger.debug(f"Generated {len(generated_text)} characters")
-            return generated_text
+            logger.debug(f"Generated {len(generated_text)} characters (raw)")
+
+            # Post-process to ensure clean ending
+            processed_text = ensure_complete_output(generated_text)
+            if len(processed_text) != len(generated_text):
+                logger.info(f"Output cleaned: {len(generated_text)} -> {len(processed_text)} chars")
+
+            return processed_text
 
         except Exception as e:
             logger.error(f"Phi3 generation failed: {e}")

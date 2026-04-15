@@ -45,6 +45,12 @@ env/
 .env.local
 .env.*.local
 
+# Settings with API keys
+settings.json
+**/settings.json
+credentials.json
+**/credentials.json
+
 # Logs
 *.log
 logs/
@@ -56,7 +62,10 @@ yarn-error.log*
 *.db
 *.sqlite
 *.sqlite3
-code-intelligence/data/chroma/
+
+# Runtime data and settings (contains API keys)
+code-intelligence/data/
+code-intelligence/code-intelligence/data/
 
 # Cache
 .cache/

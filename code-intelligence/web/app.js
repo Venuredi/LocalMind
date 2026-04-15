@@ -32,6 +32,9 @@ function setupTabs() {
                 loadGraph();
             } else if (tabId === 'stats') {
                 loadStats();
+            } else if (tabId === 'settings') {
+                loadSettings();
+                setupTemperatureSliders();
             }
         });
     });
@@ -652,6 +655,9 @@ const _COMMON_WORDS = new Set([
     'Create', 'Update', 'Delete', 'Remove', 'Show', 'Hide', 'Load', 'Save',
     'Send', 'Read', 'Write', 'Parse', 'Find', 'Search', 'Check', 'Test',
     'Move', 'Copy', 'Open', 'Close', 'Start', 'Stop', 'Enable', 'Disable',
+    'Enhance', 'Improve', 'Optimize', 'Optimise', 'Upgrade', 'Refactor',
+    'Implement', 'Debug', 'Analyze', 'Analyse', 'Review', 'Explain',
+    'Configure', 'Setup', 'Install', 'Deploy', 'Migrate', 'Convert',
 ]);
 
 function extractComponentNames(text) {
@@ -782,23 +788,37 @@ function populateContextSelection(data) {
     const layers = data.context?.layers || {};
     let hasComponents = false;
 
+    // Track seen components to avoid duplicates (by file_path which is unique)
+    const seenComponents = new Set();
+
     for (const [layer, components] of Object.entries(layers)) {
         if (components && components.length > 0) {
-            hasComponents = true;
             const layerDiv = document.createElement('div');
             layerDiv.className = 'context-layer';
-            
+
             const title = document.createElement('h4');
             title.textContent = `🔷 ${layer.toUpperCase()}`;
             title.style.marginTop = '0';
             layerDiv.appendChild(title);
 
+            let layerHasComponents = false;
+
             components.forEach(comp => {
+                // Use file_path + name as unique key to avoid duplicates
+                const compKey = `${comp.file_path}::${comp.name}`;
+                if (seenComponents.has(compKey)) {
+                    return; // Skip duplicate
+                }
+                seenComponents.add(compKey);
+
+                layerHasComponents = true;
+                hasComponents = true;
+
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'context-item';
 
                 itemDiv.innerHTML = `
-                    <input type="checkbox" id="ctx_${comp.name}" data-layer="${layer}" data-id="${comp.id || comp.name}" checked>
+                    <input type="checkbox" id="ctx_${comp.name}_${layer}" data-layer="${layer}" data-id="${comp.id || comp.name}" checked>
                     <div>
                         <strong>${comp.name}</strong> <span style="color:#666; font-size:12px;">(${comp.type})</span>
                         <div style="font-size:12px; color:#888;">${comp.file_path}</div>
@@ -806,12 +826,44 @@ function populateContextSelection(data) {
                 `;
                 layerDiv.appendChild(itemDiv);
             });
-            area.appendChild(layerDiv);
+
+            if (layerHasComponents) {
+                area.appendChild(layerDiv);
+            }
         }
     }
 
     if (!hasComponents) {
         area.innerHTML = '<p>No relevant components found. You can proceed to generate an AI prompt without repository context.</p>';
+    }
+
+    // Update the LLM provider label
+    updateLLMProviderLabel();
+}
+
+// Update LLM provider label in Prompt Builder
+async function updateLLMProviderLabel() {
+    try {
+        const response = await axios.get(`${API_BASE}/api/settings/llm`);
+        if (response.data.success) {
+            const provider = response.data.active_provider;
+            const config = response.data.active_config?.config || {};
+            const model = config.model || 'unknown';
+
+            const providerNames = {
+                'ollama': 'Ollama (Local)',
+                'openai': 'OpenAI',
+                'anthropic': 'Anthropic Claude',
+                'google': 'Google Gemini'
+            };
+
+            const label = document.getElementById('llmProviderLabel');
+            if (label) {
+                label.textContent = `(Uses ${providerNames[provider] || provider} - ${model})`;
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching LLM settings:', error);
     }
 }
 
@@ -905,9 +957,16 @@ async function generatePrompt() {
                             const finalPrompt = data.full_prompt || accumulatedPrompt;
                             promptContentEl.innerHTML = `<pre style="white-space: pre-wrap; margin: 0;">${finalPrompt}</pre>`;
 
-                            const methodBadge = data.method === 'llm'
-                                ? '<span style="background: #4CAF50; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">✨ Phi3 Enhanced</span>'
-                                : '<span style="background: #2196F3; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">📝 Template</span>';
+                            // Build method badge with actual provider info
+                            let methodBadge;
+                            if (data.method === 'llm') {
+                                const providerName = data.provider ? data.provider.toUpperCase() : 'LLM';
+                                const modelName = data.model || '';
+                                const displayText = modelName ? `${providerName} (${modelName})` : `${providerName} Enhanced`;
+                                methodBadge = `<span style="background: #4CAF50; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">✨ ${displayText}</span>`;
+                            } else {
+                                methodBadge = '<span style="background: #2196F3; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px;">📝 Template</span>';
+                            }
 
                             const metadataHtml = `
                                 <div style="background: #f0f8ff; padding: 15px; border-radius: 5px; margin-top: 15px;">
@@ -1431,6 +1490,355 @@ function showToast(message, type = 'success') {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+}
+
+// =============================================================================
+// SETTINGS / ADMINISTRATION FUNCTIONS
+// =============================================================================
+
+let currentSettings = null;
+
+// Load settings when settings tab is opened
+async function loadSettings() {
+    try {
+        const response = await axios.get(`${API_BASE}/api/settings`);
+        if (response.data.success) {
+            currentSettings = response.data.settings;
+            populateSettingsUI(currentSettings);
+            updateConfigSummary(currentSettings);
+        }
+    } catch (error) {
+        console.error('Error loading settings:', error);
+        showToast('Failed to load settings', 'error');
+    }
+}
+
+// Populate the settings UI with loaded data
+function populateSettingsUI(settings) {
+    // Set generation method
+    selectGenerationMethod(settings.prompt.generation_method, false);
+
+    // Set prompt options
+    document.getElementById('fallbackToTemplate').checked = settings.prompt.fallback_to_template;
+    document.getElementById('validateOutput').checked = settings.prompt.validate_output;
+    document.getElementById('enhanceSafety').checked = settings.prompt.enhance_safety;
+
+    // Ollama settings
+    document.getElementById('ollamaHost').value = settings.llm.ollama.host;
+    document.getElementById('ollamaModel').value = settings.llm.ollama.model;
+    document.getElementById('ollamaTemperature').value = settings.llm.ollama.temperature;
+    document.getElementById('ollamaTemperatureValue').textContent = settings.llm.ollama.temperature;
+    document.getElementById('ollamaMaxTokens').value = settings.llm.ollama.max_tokens;
+
+    // OpenAI settings
+    if (settings.llm.openai.api_key) {
+        document.getElementById('openaiApiKey').value = settings.llm.openai.api_key;
+    }
+    document.getElementById('openaiModel').value = settings.llm.openai.model;
+    document.getElementById('openaiOrganization').value = settings.llm.openai.organization || '';
+    document.getElementById('openaiTemperature').value = settings.llm.openai.temperature;
+    document.getElementById('openaiTemperatureValue').textContent = settings.llm.openai.temperature;
+    document.getElementById('openaiMaxTokens').value = settings.llm.openai.max_tokens;
+
+    // Anthropic settings
+    if (settings.llm.anthropic.api_key) {
+        document.getElementById('anthropicApiKey').value = settings.llm.anthropic.api_key;
+    }
+    document.getElementById('anthropicModel').value = settings.llm.anthropic.model;
+    document.getElementById('anthropicTemperature').value = settings.llm.anthropic.temperature;
+    document.getElementById('anthropicTemperatureValue').textContent = settings.llm.anthropic.temperature;
+    document.getElementById('anthropicMaxTokens').value = settings.llm.anthropic.max_tokens;
+
+    // Google settings
+    if (settings.llm.google.api_key) {
+        document.getElementById('googleApiKey').value = settings.llm.google.api_key;
+    }
+    document.getElementById('googleModel').value = settings.llm.google.model;
+    document.getElementById('googleTemperature').value = settings.llm.google.temperature;
+    document.getElementById('googleTemperatureValue').textContent = settings.llm.google.temperature;
+    document.getElementById('googleMaxTokens').value = settings.llm.google.max_tokens;
+
+    // Update provider statuses
+    updateProviderStatuses(settings);
+
+    // Switch to active provider tab
+    switchProviderTab(settings.llm.active_provider);
+}
+
+// Update provider status indicators
+function updateProviderStatuses(settings) {
+    // Ollama
+    const ollamaStatus = document.getElementById('ollama-status');
+    if (settings.llm.ollama.enabled) {
+        ollamaStatus.innerHTML = '<span class="status-indicator active"></span><span>Enabled</span>';
+        if (settings.llm.active_provider === 'ollama') {
+            ollamaStatus.innerHTML = '<span class="status-indicator active"></span><span>Active</span>';
+        }
+    } else {
+        ollamaStatus.innerHTML = '<span class="status-indicator disabled"></span><span>Disabled</span>';
+    }
+
+    // OpenAI
+    const openaiStatus = document.getElementById('openai-status');
+    if (settings.llm.openai.api_key && settings.llm.openai.api_key !== '') {
+        if (settings.llm.active_provider === 'openai') {
+            openaiStatus.innerHTML = '<span class="status-indicator active"></span><span>Active</span>';
+        } else {
+            openaiStatus.innerHTML = '<span class="status-indicator configured"></span><span>Configured</span>';
+        }
+    } else {
+        openaiStatus.innerHTML = '<span class="status-indicator unconfigured"></span><span>Not Configured</span>';
+    }
+
+    // Anthropic
+    const anthropicStatus = document.getElementById('anthropic-status');
+    if (settings.llm.anthropic.api_key && settings.llm.anthropic.api_key !== '') {
+        if (settings.llm.active_provider === 'anthropic') {
+            anthropicStatus.innerHTML = '<span class="status-indicator active"></span><span>Active</span>';
+        } else {
+            anthropicStatus.innerHTML = '<span class="status-indicator configured"></span><span>Configured</span>';
+        }
+    } else {
+        anthropicStatus.innerHTML = '<span class="status-indicator unconfigured"></span><span>Not Configured</span>';
+    }
+
+    // Google
+    const googleStatus = document.getElementById('google-status');
+    if (settings.llm.google.api_key && settings.llm.google.api_key !== '') {
+        if (settings.llm.active_provider === 'google') {
+            googleStatus.innerHTML = '<span class="status-indicator active"></span><span>Active</span>';
+        } else {
+            googleStatus.innerHTML = '<span class="status-indicator configured"></span><span>Configured</span>';
+        }
+    } else {
+        googleStatus.innerHTML = '<span class="status-indicator unconfigured"></span><span>Not Configured</span>';
+    }
+}
+
+// Update configuration summary
+function updateConfigSummary(settings) {
+    const methodLabels = {
+        'template': '📝 Template Based',
+        'llm': '🤖 LLM Based',
+        'hybrid': '⚡ Hybrid'
+    };
+
+    const providerLabels = {
+        'ollama': '🏠 Ollama (Local)',
+        'openai': '🟢 OpenAI',
+        'anthropic': '🟠 Anthropic Claude',
+        'google': '🔵 Google Gemini'
+    };
+
+    document.getElementById('summaryMethod').textContent = methodLabels[settings.prompt.generation_method] || settings.prompt.generation_method;
+    document.getElementById('summaryProvider').textContent = providerLabels[settings.llm.active_provider] || settings.llm.active_provider;
+
+    // Get the model for the active provider
+    const activeProvider = settings.llm.active_provider;
+    const model = settings.llm[activeProvider]?.model || 'Unknown';
+    document.getElementById('summaryModel').textContent = model;
+
+    // Determine status
+    let status = '❌ Not Ready';
+    if (settings.prompt.generation_method === 'template') {
+        status = '✅ Ready (Template Mode)';
+    } else if (activeProvider === 'ollama' && settings.llm.ollama.enabled) {
+        status = '✅ Ready (Local LLM)';
+    } else if (activeProvider !== 'ollama') {
+        const apiKey = settings.llm[activeProvider]?.api_key;
+        if (apiKey && apiKey !== '' && !apiKey.startsWith('****')) {
+            status = '✅ Ready (Cloud LLM)';
+        } else if (apiKey && apiKey.startsWith('****')) {
+            status = '✅ Configured (API Key Set)';
+        } else {
+            status = '⚠️ API Key Required';
+        }
+    }
+    document.getElementById('summaryStatus').textContent = status;
+}
+
+// Select generation method
+function selectGenerationMethod(method, save = true) {
+    // Update UI
+    document.querySelectorAll('.method-card').forEach(card => {
+        card.classList.remove('selected');
+        if (card.dataset.method === method) {
+            card.classList.add('selected');
+        }
+    });
+
+    // Update currentSettings if we're saving
+    if (save && currentSettings) {
+        currentSettings.prompt.generation_method = method;
+    }
+}
+
+// Save prompt settings
+async function savePromptSettings() {
+    const selectedMethod = document.querySelector('.method-card.selected')?.dataset.method || 'hybrid';
+
+    const promptSettings = {
+        generation_method: selectedMethod,
+        fallback_to_template: document.getElementById('fallbackToTemplate').checked,
+        validate_output: document.getElementById('validateOutput').checked,
+        enhance_safety: document.getElementById('enhanceSafety').checked
+    };
+
+    try {
+        const response = await axios.put(`${API_BASE}/api/settings/prompt`, promptSettings);
+        if (response.data.success) {
+            showToast('Prompt settings saved successfully!', 'success');
+            await loadSettings(); // Reload to update summary
+        }
+    } catch (error) {
+        console.error('Error saving prompt settings:', error);
+        showToast('Failed to save prompt settings', 'error');
+    }
+}
+
+// Switch provider tab
+function switchProviderTab(provider) {
+    // Update tab buttons
+    document.querySelectorAll('.provider-tab').forEach(tab => {
+        tab.classList.remove('active');
+        if (tab.dataset.provider === provider) {
+            tab.classList.add('active');
+        }
+    });
+
+    // Update content
+    document.querySelectorAll('.provider-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    document.getElementById(`provider-${provider}`).classList.add('active');
+}
+
+// Test provider connection
+async function testProvider(provider) {
+    const statusEl = document.getElementById(`${provider}-status`);
+    statusEl.innerHTML = '<span class="status-indicator checking"></span><span>Testing...</span>';
+
+    let config = {};
+
+    if (provider === 'ollama') {
+        config = {
+            provider: 'ollama',
+            host: document.getElementById('ollamaHost').value,
+            model: document.getElementById('ollamaModel').value
+        };
+    } else if (provider === 'openai') {
+        config = {
+            provider: 'openai',
+            api_key: document.getElementById('openaiApiKey').value,
+            model: document.getElementById('openaiModel').value
+        };
+    } else if (provider === 'anthropic') {
+        config = {
+            provider: 'anthropic',
+            api_key: document.getElementById('anthropicApiKey').value,
+            model: document.getElementById('anthropicModel').value
+        };
+    } else if (provider === 'google') {
+        config = {
+            provider: 'google',
+            api_key: document.getElementById('googleApiKey').value,
+            model: document.getElementById('googleModel').value
+        };
+    }
+
+    try {
+        const response = await axios.post(`${API_BASE}/api/settings/llm/test`, config);
+
+        if (response.data.success) {
+            statusEl.innerHTML = '<span class="status-indicator active"></span><span>Connected!</span>';
+            showToast(`${provider} connection successful!`, 'success');
+        } else {
+            statusEl.innerHTML = '<span class="status-indicator error"></span><span>Failed</span>';
+            showToast(`Connection failed: ${response.data.message}`, 'error');
+        }
+    } catch (error) {
+        statusEl.innerHTML = '<span class="status-indicator error"></span><span>Error</span>';
+        showToast(`Connection test failed: ${error.response?.data?.detail || error.message}`, 'error');
+    }
+}
+
+// Save provider settings and activate
+async function saveProviderSettings(provider) {
+    let config = { provider: provider };
+
+    if (provider === 'ollama') {
+        config.enabled = true;
+        config.host = document.getElementById('ollamaHost').value;
+        config.model = document.getElementById('ollamaModel').value;
+        config.temperature = parseFloat(document.getElementById('ollamaTemperature').value);
+        config.max_tokens = parseInt(document.getElementById('ollamaMaxTokens').value);
+    } else if (provider === 'openai') {
+        const apiKey = document.getElementById('openaiApiKey').value;
+        if (apiKey && !apiKey.startsWith('****')) {
+            config.api_key = apiKey;
+        }
+        config.enabled = true;
+        config.model = document.getElementById('openaiModel').value;
+        config.organization = document.getElementById('openaiOrganization').value || null;
+        config.temperature = parseFloat(document.getElementById('openaiTemperature').value);
+        config.max_tokens = parseInt(document.getElementById('openaiMaxTokens').value);
+    } else if (provider === 'anthropic') {
+        const apiKey = document.getElementById('anthropicApiKey').value;
+        if (apiKey && !apiKey.startsWith('****')) {
+            config.api_key = apiKey;
+        }
+        config.enabled = true;
+        config.model = document.getElementById('anthropicModel').value;
+        config.temperature = parseFloat(document.getElementById('anthropicTemperature').value);
+        config.max_tokens = parseInt(document.getElementById('anthropicMaxTokens').value);
+    } else if (provider === 'google') {
+        const apiKey = document.getElementById('googleApiKey').value;
+        if (apiKey && !apiKey.startsWith('****')) {
+            config.api_key = apiKey;
+        }
+        config.enabled = true;
+        config.model = document.getElementById('googleModel').value;
+        config.temperature = parseFloat(document.getElementById('googleTemperature').value);
+        config.max_tokens = parseInt(document.getElementById('googleMaxTokens').value);
+    }
+
+    try {
+        // Save provider settings
+        await axios.put(`${API_BASE}/api/settings/llm/${provider}`, config);
+
+        // Set as active provider
+        await axios.put(`${API_BASE}/api/settings/llm/active`, { provider: provider });
+
+        showToast(`${provider} configured and activated!`, 'success');
+        await loadSettings(); // Reload to update UI
+    } catch (error) {
+        console.error('Error saving provider settings:', error);
+        showToast(`Failed to save settings: ${error.response?.data?.detail || error.message}`, 'error');
+    }
+}
+
+// Toggle API key visibility
+function toggleApiKeyVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    if (input.type === 'password') {
+        input.type = 'text';
+    } else {
+        input.type = 'password';
+    }
+}
+
+// Setup temperature slider event listeners
+function setupTemperatureSliders() {
+    const sliders = ['ollama', 'openai', 'anthropic', 'google'];
+    sliders.forEach(provider => {
+        const slider = document.getElementById(`${provider}Temperature`);
+        const valueDisplay = document.getElementById(`${provider}TemperatureValue`);
+        if (slider && valueDisplay) {
+            slider.addEventListener('input', () => {
+                valueDisplay.textContent = slider.value;
+            });
+        }
+    });
 }
 
 // Progress Modal Functions

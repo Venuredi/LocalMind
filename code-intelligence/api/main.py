@@ -845,33 +845,60 @@ async def generate_prompt(request: PromptGenerationRequest):
                     detail=f"Invalid prompt type: {str(e)}. Available types: {template_engine.get_available_types()}"
                 )
         else:
-            # User requested LLM (or default)
+            # User requested LLM (or default) - use configured provider from settings
             generation_method = None
             try:
-                # Try LLM-based generation first
-                print("[PROMPT_GEN] User selected LLM generation method, attempting to initialize Phi3 engine...")
-                phi3_engine = Phi3PromptEngine()
-                print("[PROMPT_GEN] Phi3 engine initialized, calling generate()...")
+                # Get configured LLM provider from settings
+                from config.settings import get_settings
+                settings = get_settings()
+                active_provider = settings.llm.active_provider.value
+                provider_config = getattr(settings.llm, active_provider)
 
-                result = phi3_engine.generate(
-                    prompt_type=request.type,
-                    context=full_context,
-                    user_description=request.description,
-                    title=request.title
+                print(f"[PROMPT_GEN] User selected LLM generation method, using provider: {active_provider} ({provider_config.model})")
+
+                # Create LLM provider from settings
+                llm_provider = LLMProviderFactory.create_from_settings()
+
+                if llm_provider is None:
+                    raise RuntimeError(f"LLM provider '{active_provider}' not properly configured")
+
+                print(f"[PROMPT_GEN] {active_provider} provider initialized, generating prompt...")
+
+                # Build the prompt for the LLM
+                from prompt.system_instructions import SystemInstructions
+                from prompt.ontology_formatter import OntologyFormatter
+
+                system_instructions = SystemInstructions()
+                formatter = OntologyFormatter()
+
+                # Get tech stack from context
+                tech_stack = full_context.get('tech_stack', 'unknown')
+                system_prompt = system_instructions.get_instructions(tech_stack, full_context)
+
+                # Format the user prompt
+                formatted_context = formatter.format_for_phi3(full_context)
+                user_prompt = f"""Generate an AI-ready prompt for the following task:
+
+Task Type: {request.type}
+Title: {request.title}
+Description: {request.description}
+
+Context:
+{formatted_context}
+
+Generate a comprehensive, well-structured prompt that an AI coding assistant can use to complete this task.
+Include relevant code context, constraints, and clear instructions."""
+
+                # Generate using the configured LLM
+                generated_prompt = llm_provider.generate(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=provider_config.max_tokens,
+                    temperature=provider_config.temperature
                 )
 
-                print(f"[PROMPT_GEN] Phi3 returned result with success={result.get('success')}, has_prompt={bool(result.get('prompt'))}")
-
-                # Check if LLM generation succeeded
-                if result.get("success") and result.get("prompt"):
-                    generated_prompt = result.get("prompt")
-                    generation_method = "llm"
-                    print(f"[PROMPT_GEN] ✅ LLM generation succeeded, prompt length: {len(generated_prompt)}")
-                else:
-                    # LLM returned failure, fall back to templates
-                    error_msg = result.get("error", "Unknown error")
-                    print(f"[PROMPT_GEN] ⚠️ LLM generation returned failure: {error_msg}, falling back to templates")
-                    raise RuntimeError(error_msg)
+                generation_method = f"llm ({active_provider})"
+                print(f"[PROMPT_GEN] ✅ LLM generation succeeded using {active_provider}, prompt length: {len(generated_prompt)}")
 
             except (RuntimeError, Exception) as llm_error:
                 # Fallback to template-based generation if LLM fails
@@ -1010,26 +1037,61 @@ async def generate_prompt_stream(request: PromptGenerationRequest):
                 yield f"data: {json.dumps({'type': 'complete', 'full_prompt': prompt, 'method': 'template'})}\n\n"
 
             else:
-                # User requested LLM (or default)
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing Phi3...', 'progress': 10})}\n\n"
+                # User requested LLM (or default) - use configured provider from settings
+                from config.settings import get_settings
+                settings = get_settings()
+                active_provider = settings.llm.active_provider.value
+                provider_config = getattr(settings.llm, active_provider)
+
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Initializing {active_provider.upper()} LLM...', 'progress': 10})}\n\n"
 
                 try:
-                    phi3_engine = Phi3PromptEngine()
-                    yield f"data: {json.dumps({'type': 'status', 'message': 'Generating prompt with Phi3...', 'progress': 20})}\n\n"
+                    # Create LLM provider from settings
+                    llm_provider = LLMProviderFactory.create_from_settings()
 
-                    # Stream chunks from Phi3
+                    if llm_provider is None:
+                        raise RuntimeError(f"LLM provider '{active_provider}' not properly configured")
+
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Generating prompt with {active_provider} ({provider_config.model})...', 'progress': 20})}\n\n"
+
+                    # Build the prompt for the LLM
+                    from prompt.system_instructions import SystemInstructions
+                    from prompt.ontology_formatter import OntologyFormatter
+
+                    system_instructions = SystemInstructions()
+                    formatter = OntologyFormatter()
+
+                    # Get tech stack from context
+                    tech_stack = full_context.get('tech_stack', 'unknown')
+                    system_prompt = system_instructions.get_instructions(tech_stack, full_context)
+
+                    # Format the user prompt
+                    formatted_context = formatter.format_for_phi3(full_context)
+                    user_prompt = f"""Generate an AI-ready prompt for the following task:
+
+Task Type: {request.type}
+Title: {request.title}
+Description: {request.description}
+
+Context:
+{formatted_context}
+
+Generate a comprehensive, well-structured prompt that an AI coding assistant can use to complete this task.
+Include relevant code context, constraints, and clear instructions."""
+
+                    # Stream chunks from the configured LLM
                     accumulated = ""
-                    for chunk in phi3_engine.generate_stream(
-                        prompt_type=request.type,
-                        context=full_context,
-                        user_description=request.description,
-                        title=request.title
+                    for chunk in llm_provider.generate_stream(
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        max_tokens=provider_config.max_tokens,
+                        temperature=provider_config.temperature
                     ):
                         accumulated += chunk
                         yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
 
                     # Send completion
-                    yield f"data: {json.dumps({'type': 'complete', 'full_prompt': accumulated, 'method': 'llm'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'complete', 'full_prompt': accumulated, 'method': 'llm', 'provider': active_provider, 'model': provider_config.model})}\n\n"
 
                 except Exception as llm_error:
                     # Fallback to template (non-streaming)
@@ -1079,6 +1141,267 @@ async def get_prompt_types():
             "analysis": "Analyze code and provide insights",
             "feature_extension": "Extend existing features with new capabilities"
         }
+    }
+
+
+# =============================================================================
+# SETTINGS / ADMINISTRATION ENDPOINTS
+# =============================================================================
+
+from config.settings import (
+    SettingsManager,
+    AppSettings,
+    LLMProvider,
+    PromptGenerationMethod,
+    get_settings,
+    update_settings
+)
+from llm.llm_provider import LLMProviderFactory
+
+# Initialize settings manager
+settings_manager = SettingsManager()
+
+
+class LLMConfigUpdate(BaseModel):
+    """Model for updating LLM provider configuration."""
+    provider: str  # ollama, openai, anthropic, google
+    enabled: Optional[bool] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    host: Optional[str] = None  # For Ollama
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    organization: Optional[str] = None  # For OpenAI
+
+
+class PromptSettingsUpdate(BaseModel):
+    """Model for updating prompt generation settings."""
+    generation_method: Optional[str] = None  # template, llm, hybrid
+    fallback_to_template: Optional[bool] = None
+    validate_output: Optional[bool] = None
+    enhance_safety: Optional[bool] = None
+
+
+class SetActiveProviderRequest(BaseModel):
+    """Model for setting active LLM provider."""
+    provider: str  # ollama, openai, anthropic, google
+
+
+class TestProviderRequest(BaseModel):
+    """Model for testing a provider configuration."""
+    provider: str
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    host: Optional[str] = None
+
+
+@app.get("/api/settings")
+async def get_all_settings():
+    """Get all application settings."""
+    settings = get_settings()
+
+    # Mask API keys for security (show only last 4 chars)
+    settings_dict = settings.model_dump()
+
+    for provider in ['openai', 'anthropic', 'google']:
+        api_key = settings_dict['llm'][provider].get('api_key', '')
+        if api_key and len(api_key) > 4:
+            settings_dict['llm'][provider]['api_key'] = '****' + api_key[-4:]
+
+    return {
+        "success": True,
+        "settings": settings_dict
+    }
+
+
+@app.get("/api/settings/llm")
+async def get_llm_settings():
+    """Get LLM-specific settings."""
+    settings = get_settings()
+    providers = settings_manager.get_available_providers()
+    active_config = settings_manager.get_active_llm_config()
+
+    return {
+        "success": True,
+        "active_provider": settings.llm.active_provider.value,
+        "providers": providers,
+        "active_config": active_config,
+        "llm_enabled": settings_manager.is_llm_enabled()
+    }
+
+
+@app.get("/api/settings/prompt")
+async def get_prompt_settings():
+    """Get prompt generation settings."""
+    settings = get_settings()
+
+    return {
+        "success": True,
+        "generation_method": settings.prompt.generation_method.value,
+        "fallback_to_template": settings.prompt.fallback_to_template,
+        "validate_output": settings.prompt.validate_output,
+        "enhance_safety": settings.prompt.enhance_safety,
+        "available_methods": ["template", "llm", "hybrid"]
+    }
+
+
+@app.put("/api/settings/llm/active")
+async def set_active_llm_provider(request: SetActiveProviderRequest):
+    """Set the active LLM provider."""
+    valid_providers = ['ollama', 'openai', 'anthropic', 'google']
+
+    if request.provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider. Must be one of: {valid_providers}"
+        )
+
+    updates = {"llm": {"active_provider": request.provider}}
+    update_settings(updates)
+
+    return {
+        "success": True,
+        "message": f"Active provider set to {request.provider}",
+        "active_provider": request.provider
+    }
+
+
+@app.put("/api/settings/llm/{provider}")
+async def update_llm_provider_settings(provider: str, config: LLMConfigUpdate):
+    """Update settings for a specific LLM provider."""
+    valid_providers = ['ollama', 'openai', 'anthropic', 'google']
+
+    if provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider. Must be one of: {valid_providers}"
+        )
+
+    # Build update dict
+    updates = {"llm": {provider: {}}}
+
+    if config.enabled is not None:
+        updates["llm"][provider]["enabled"] = config.enabled
+    if config.api_key is not None:
+        updates["llm"][provider]["api_key"] = config.api_key
+    if config.model is not None:
+        updates["llm"][provider]["model"] = config.model
+    if config.temperature is not None:
+        updates["llm"][provider]["temperature"] = config.temperature
+    if config.max_tokens is not None:
+        updates["llm"][provider]["max_tokens"] = config.max_tokens
+
+    # Provider-specific fields
+    if provider == 'ollama' and config.host is not None:
+        updates["llm"][provider]["host"] = config.host
+    if provider == 'openai' and config.organization is not None:
+        updates["llm"][provider]["organization"] = config.organization
+
+    updated_settings = update_settings(updates)
+
+    return {
+        "success": True,
+        "message": f"Updated {provider} settings",
+        "provider": provider
+    }
+
+
+@app.put("/api/settings/prompt")
+async def update_prompt_settings(config: PromptSettingsUpdate):
+    """Update prompt generation settings."""
+    updates = {"prompt": {}}
+
+    if config.generation_method is not None:
+        valid_methods = ['template', 'llm', 'hybrid']
+        if config.generation_method not in valid_methods:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid generation method. Must be one of: {valid_methods}"
+            )
+        updates["prompt"]["generation_method"] = config.generation_method
+
+    if config.fallback_to_template is not None:
+        updates["prompt"]["fallback_to_template"] = config.fallback_to_template
+    if config.validate_output is not None:
+        updates["prompt"]["validate_output"] = config.validate_output
+    if config.enhance_safety is not None:
+        updates["prompt"]["enhance_safety"] = config.enhance_safety
+
+    update_settings(updates)
+
+    return {
+        "success": True,
+        "message": "Prompt settings updated"
+    }
+
+
+@app.post("/api/settings/llm/test")
+async def test_llm_provider(request: TestProviderRequest):
+    """Test connection to an LLM provider."""
+    config = {}
+
+    if request.provider == 'ollama':
+        config['host'] = request.host or "http://localhost:11434"
+        config['model'] = request.model or "phi3:mini"
+    elif request.provider in ['openai', 'anthropic', 'google']:
+        if not request.api_key:
+            # Try to get from saved settings
+            settings = get_settings()
+            provider_settings = getattr(settings.llm, request.provider)
+            config['api_key'] = provider_settings.api_key
+        else:
+            config['api_key'] = request.api_key
+
+        if request.model:
+            config['model'] = request.model
+
+    result = LLMProviderFactory.test_provider(request.provider, config)
+
+    return {
+        "success": result["success"],
+        "message": result["message"],
+        "model_info": result.get("model_info"),
+        "provider": request.provider
+    }
+
+
+@app.get("/api/settings/llm/models/{provider}")
+async def get_available_models(provider: str):
+    """Get available models for a provider."""
+    models = {
+        "ollama": [
+            {"id": "phi3:mini", "name": "Phi-3 Mini", "description": "Fast, lightweight model"},
+            {"id": "llama3.2", "name": "Llama 3.2", "description": "Meta's latest model"},
+            {"id": "mistral", "name": "Mistral 7B", "description": "High quality open model"},
+            {"id": "codellama", "name": "Code Llama", "description": "Optimized for code"},
+            {"id": "deepseek-coder", "name": "DeepSeek Coder", "description": "Code-focused model"}
+        ],
+        "openai": [
+            {"id": "gpt-4o", "name": "GPT-4o", "description": "Most capable model"},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "description": "Fast and affordable"},
+            {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "description": "Balanced performance"},
+            {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "description": "Legacy model"}
+        ],
+        "anthropic": [
+            {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "description": "Latest balanced model"},
+            {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "description": "Best for coding"},
+            {"id": "claude-3-haiku-20240307", "name": "Claude 3 Haiku", "description": "Fast and efficient"},
+            {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "description": "Most capable"}
+        ],
+        "google": [
+            {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro", "description": "Most capable"},
+            {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "description": "Fast and efficient"},
+            {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "description": "Latest fast model"}
+        ]
+    }
+
+    if provider not in models:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    return {
+        "success": True,
+        "provider": provider,
+        "models": models[provider]
     }
 
 
