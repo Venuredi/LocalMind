@@ -3,12 +3,17 @@ Vector Store using ChromaDB
 Provides semantic search capabilities for code components.
 """
 
+import os
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import hashlib
+
+# Force ONNX to use CPU execution provider to avoid CoreML issues on macOS
+os.environ.setdefault("ONNX_EXECUTION_PROVIDERS", "CPUExecutionProvider")
 
 
 class VectorStore:
@@ -35,10 +40,18 @@ class VectorStore:
             )
         )
 
-        # Get or create collection
+        # Use SentenceTransformer with explicit CPU device to avoid CoreML issues on macOS
+        # This ensures consistent behavior across all machines (Intel and Apple Silicon)
+        self.embedding_function = SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2",
+            device="cpu"
+        )
+
+        # Get or create collection with explicit embedding function
         self.collection = self.client.get_or_create_collection(
             name="code_components",
-            metadata={"hnsw:space": "cosine"}
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self.embedding_function
         )
 
     def index_components(self, components: List[Dict[str, Any]]):
@@ -220,7 +233,8 @@ class VectorStore:
         self.client.delete_collection("code_components")
         self.collection = self.client.get_or_create_collection(
             name="code_components",
-            metadata={"hnsw:space": "cosine"}
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self.embedding_function
         )
 
     def get_stats(self) -> Dict[str, Any]:
